@@ -2,19 +2,11 @@ name: Smart Money Screener
 
 on:
   schedule:
-    # Universe rebuild — duminica 20:00 UTC
     - cron: '0 20 * * 0'
-
-    # Scan dimineata — Luni-Vineri 13:00 UTC = 08:00 ET (summer) / 08:00 EST (winter)
     - cron: '0 13 * * 1-5'
-
-    # Enrich dupa scan — 13:45 UTC (45 min dupa scan, sa fie date complete)
     - cron: '45 13 * * 1-5'
-
-    # Enrich dupa inchidere — 21:30 UTC = 16:30 ET
     - cron: '30 21 * * 1-5'
 
-  # Permite rulare manuala din GitHub UI (util pentru debug)
   workflow_dispatch:
     inputs:
       phase:
@@ -31,13 +23,15 @@ jobs:
   run-screener:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
       - name: Setup Python 3.11
-        uses: actions/setup-python@v5.6.0
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -45,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Detecteaza faza din cron sau input manual
+      - name: Detecteaza faza
         id: detect-phase
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -53,7 +47,7 @@ jobs:
           else
             HOUR=$(date -u +%H)
             MIN=$(date -u +%M)
-            DOW=$(date -u +%u)  # 7 = duminica
+            DOW=$(date -u +%u)
 
             if [ "$DOW" = "7" ] && [ "$HOUR" = "20" ]; then
               echo "phase=universe" >> $GITHUB_OUTPUT
