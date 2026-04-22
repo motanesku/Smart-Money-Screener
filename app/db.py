@@ -1,6 +1,6 @@
 """
 Toate operațiunile cu Supabase.
-Compatibil cu schema existentă și cu migration incrementală.
+Compatibil cu schema existentă, migration incrementală și enriched_view.
 """
 import os
 from datetime import date, timedelta
@@ -36,7 +36,11 @@ def save_universe(tickers: list[dict]):
 
 def get_universe() -> list[dict]:
     sb = get_client()
-    res = sb.table("universe").select("ticker,company_name,sector,industry,market_cap,avg_volume").execute()
+    res = (
+        sb.table("universe")
+        .select("ticker,company_name,sector,industry,market_cap,avg_volume")
+        .execute()
+    )
     return res.data
 
 
@@ -124,7 +128,7 @@ def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:
     sb = get_client()
     since = (date.today() - timedelta(days=days_back)).isoformat()
     res = (
-        sb.table("enriched")
+        sb.table("enriched_view")
         .select("*")
         .gte("enrich_date", since)
         .gte("score", min_score)
@@ -137,8 +141,8 @@ def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:
 def get_ticker_history(ticker: str, limit: int = 10) -> list[dict]:
     sb = get_client()
     res = (
-        sb.table("enriched")
-        .select("enrich_date,ticker,score,vol_ratio,insider_buys_90d,insider_buy_value,insider_sells_90d,short_interest_pct,pe_ratio,score_volume,score_insider,score_short_interest,score_fundamental,score_penalty,volume_signal,insider_signal,short_signal,thesis,score_insider_quality,top_insider_role,ownership_form,ownership_holder,ownership_pct,ownership_signal,score_ownership,short_sale_volume,total_volume_reported,short_sale_ratio,short_flow_signal,score_short_flow")
+        sb.table("enriched_view")
+        .select("*")
         .eq("ticker", ticker.upper())
         .order("enrich_date", desc=True)
         .limit(limit)
@@ -151,13 +155,21 @@ def get_ticker_history(ticker: str, limit: int = 10) -> list[dict]:
 
 def get_watchlist() -> list[dict]:
     sb = get_client()
-    res = sb.table("watchlist").select("ticker,added_at,notes").order("added_at", desc=True).execute()
+    res = (
+        sb.table("watchlist")
+        .select("ticker,added_at,notes")
+        .order("added_at", desc=True)
+        .execute()
+    )
     return res.data
 
 
 def add_to_watchlist(ticker: str, notes: str = ""):
     sb = get_client()
-    sb.table("watchlist").upsert({"ticker": ticker.upper(), "notes": notes}, on_conflict="ticker").execute()
+    sb.table("watchlist").upsert(
+        {"ticker": ticker.upper(), "notes": notes},
+        on_conflict="ticker"
+    ).execute()
 
 
 def remove_from_watchlist(ticker: str):
@@ -169,15 +181,17 @@ def get_watchlist_enriched() -> list[dict]:
     watchlist = get_watchlist()
     if not watchlist:
         return []
+
     tickers = [w["ticker"] for w in watchlist]
     sb = get_client()
     res = (
-        sb.table("enriched")
+        sb.table("enriched_view")
         .select("*")
         .in_("ticker", tickers)
         .order("enrich_date", desc=True)
         .execute()
     )
+
     seen = set()
     result = []
     for row in (res.data or []):
