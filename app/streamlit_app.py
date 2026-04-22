@@ -171,7 +171,7 @@ def get_haiku_interpretation(ticker: str, data: dict) -> str:
     if not ANTHROPIC_KEY:
         return ""
 
-    prompt = f"""You are a concise financial analyst. Analyze these signals for {ticker} and give a 3-sentence interpretation. Be direct, specific, and honest about weaknesses.
+    prompt = f"""Ești un analist financiar concis. Analizează aceste semnale pentru {ticker} și oferă o interpretare în 3 propoziții. Fii direct, specific și sincer în privința punctelor slabe. ...""".
 
 Signals:
 - Score: {data.get('score', 0)}/100
@@ -186,7 +186,7 @@ Signals:
 - Sector: {data.get('sector', '—')}
 - Ownership form (13D/13G): {data.get('ownership_form', '—')}
 
-Write 3 sentences: (1) what the volume+insider pattern suggests, (2) what concerns or confirms the thesis, (3) one specific risk or caveat. No fluff."""
+Scrie 3 propoziții: (1) ce sugerează combinația dintre volum și activitatea insiderilor, (2) ce aspecte ridică semne de întrebare sau confirmă teza, (3) un risc sau o avertizare specifică. Fără umplutură."""
 
     try:
         r = requests.post(
