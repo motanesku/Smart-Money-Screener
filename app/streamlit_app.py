@@ -1,6 +1,6 @@
 """
-Premium Streamlit UI — stabil pentru Streamlit Cloud.
-Păstrează structura proiectului și Supabase backend.
+Premium Streamlit UI — varianta stabilă fără AgGrid.
+Păstrează structura proiectului și backend-ul Supabase.
 """
 import sys
 sys.path.insert(0, ".")
@@ -8,7 +8,6 @@ sys.path.insert(0, ".")
 from datetime import date
 import pandas as pd
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder
 
 from app.db import (
     get_enriched,
@@ -63,8 +62,16 @@ st.markdown("""
     color: #9aa4b2;
     font-size: 0.84rem;
 }
+.card {
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.02);
+    margin-bottom: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
+
 
 def fmt_money(v):
     if v is None or v == 0:
@@ -81,6 +88,7 @@ def fmt_money(v):
         return f"${v/1_000:.0f}K"
     return f"${v:.0f}"
 
+
 def fmt_int(v):
     if v is None or v == 0:
         return "—"
@@ -88,6 +96,7 @@ def fmt_int(v):
         return f"{int(v):,}"
     except Exception:
         return "—"
+
 
 def fmt_pct(v):
     if v is None:
@@ -100,7 +109,8 @@ def fmt_pct(v):
         return f"{v*100:.1f}%"
     return f"{v:.1f}%"
 
-def score_bucket(score):
+
+def score_signal(score):
     try:
         score = int(score)
     except Exception:
@@ -110,6 +120,7 @@ def score_bucket(score):
     if score >= 45:
         return "🟡 Neutral"
     return "🔴 Weak"
+
 
 def build_scanner_df(rows: list[dict]) -> pd.DataFrame:
     if not rows:
@@ -128,7 +139,7 @@ def build_scanner_df(rows: list[dict]) -> pd.DataFrame:
             df[c] = None
 
     df["score"] = df["score"].fillna(0).astype(int)
-    df["signal"] = df["score"].apply(score_bucket)
+    df["signal"] = df["score"].apply(score_signal)
     df["price"] = df["price"].apply(lambda x: f"${float(x):.2f}" if pd.notna(x) else "—")
     df["vol_ratio"] = df["vol_ratio"].apply(lambda x: f"{float(x):.2f}x" if pd.notna(x) else "—")
     df["volume"] = df["volume"].apply(fmt_int)
@@ -147,6 +158,7 @@ def build_scanner_df(rows: list[dict]) -> pd.DataFrame:
         "market_cap", "sector", "industry", "enrich_date"
     ]]
 
+
 def build_watchlist_df(rows: list[dict]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
@@ -163,7 +175,7 @@ def build_watchlist_df(rows: list[dict]) -> pd.DataFrame:
             df[c] = None
 
     df["score"] = df["score"].fillna(0).astype(int)
-    df["signal"] = df["score"].apply(score_bucket)
+    df["signal"] = df["score"].apply(score_signal)
     df["price"] = df["price"].apply(lambda x: f"${float(x):.2f}" if pd.notna(x) else "—")
     df["vol_ratio"] = df["vol_ratio"].apply(lambda x: f"{float(x):.2f}x" if pd.notna(x) else "—")
     df["insider_buys_90d"] = df["insider_buys_90d"].fillna(0).astype(int)
@@ -178,6 +190,7 @@ def build_watchlist_df(rows: list[dict]) -> pd.DataFrame:
         "short_interest_pct", "pe_ratio", "sector", "industry", "enrich_date"
     ]]
 
+
 def render_kpis(df: pd.DataFrame):
     total = len(df)
     avg_score = int(df["score"].mean()) if total else 0
@@ -190,69 +203,6 @@ def render_kpis(df: pd.DataFrame):
     c3.metric("Top score", top_score)
     c4.metric("Top ticker", top_ticker)
 
-def aggrid_table(df: pd.DataFrame, key: str):
-    if df.empty:
-        return {"selected_rows": []}
-
-    gb = GridOptionsBuilder.from_dataframe(df)
-
-    gb.configure_default_column(
-        sortable=True,
-        filter=True,
-        resizable=True,
-        min_column_width=95,
-    )
-
-    gb.configure_selection(
-        selection_mode="single",
-        use_checkbox=True,
-    )
-
-    gb.configure_grid_options(
-        rowHeight=38,
-        headerHeight=40,
-        animateRows=True,
-        domLayout="normal",
-    )
-
-    gb.configure_column("ticker", pinned="left", width=110)
-    gb.configure_column("score", width=95, type=["numericColumn"])
-    gb.configure_column("signal", width=130)
-    gb.configure_column("price", width=90)
-    gb.configure_column("vol_ratio", width=100)
-    gb.configure_column("volume", width=115)
-    gb.configure_column("avg_volume_20d", header_name="Avg Vol 20d", width=125)
-    gb.configure_column("insider_buys_90d", header_name="Buys 90d", width=100)
-    gb.configure_column("insider_buy_value", header_name="Buy Value", width=115)
-    gb.configure_column("insider_sells_90d", header_name="Sells 90d", width=100)
-    gb.configure_column("short_interest_pct", header_name="Short %", width=95)
-    gb.configure_column("pe_ratio", header_name="P/E", width=85)
-    if "market_cap" in df.columns:
-        gb.configure_column("market_cap", header_name="Mkt Cap", width=110)
-    gb.configure_column("sector", width=130)
-    gb.configure_column("industry", width=160)
-    gb.configure_column("enrich_date", header_name="Updated", width=110)
-
-    grid = AgGrid(
-        df,
-        gridOptions=gb.build(),
-        height=420,
-        fit_columns_on_grid_load=False,
-        update_on=["selectionChanged"],
-        theme="balham",
-        key=key,
-    )
-    return grid or {"selected_rows": []}
-
-def normalize_selected(grid_result):
-    if not grid_result:
-        return []
-    selected = grid_result.get("selected_rows", [])
-    if selected is None:
-        return []
-    if isinstance(selected, pd.DataFrame):
-        return selected.to_dict("records")
-    return selected
 
 def load_scanner_data(days_back: int, min_score: int):
     try:
@@ -261,12 +211,14 @@ def load_scanner_data(days_back: int, min_score: int):
         st.error(f"Eroare conexiune DB: {e}")
         st.stop()
 
+
 def load_watchlist_data():
     try:
         return get_watchlist(), get_watchlist_enriched()
     except Exception as e:
         st.error(f"Eroare conexiune DB: {e}")
         st.stop()
+
 
 with st.sidebar:
     st.markdown("## 📈 Smart Money Screener")
@@ -283,6 +235,7 @@ with st.sidebar:
     st.caption("Actualizat 2x/zi via GitHub Actions")
     st.caption("08:45 ET — enrich dimineața")
     st.caption("16:30 ET — enrich după închidere")
+
 
 st.markdown("""
 <div class="hero">
@@ -323,30 +276,33 @@ with tab_scanner:
         )
 
         st.markdown('<div class="section-title">Candidates</div>', unsafe_allow_html=True)
-        grid = aggrid_table(df, "scanner_grid")
-        selected = normalize_selected(grid)
+        st.dataframe(
+            df,
+            width="stretch",
+            hide_index=True,
+            height=430,
+        )
+
+        ticker_options = df["ticker"].tolist()
+        selected_ticker = st.selectbox("Selectează ticker pentru acțiune", ticker_options, key="scanner_select")
 
         c1, c2, c3 = st.columns([1.2, 1.2, 6])
         with c1:
             if st.button("Add selected", width="stretch", type="primary"):
-                if selected:
-                    ticker = selected[0]["ticker"]
-                    add_to_watchlist(ticker)
-                    st.success(f"{ticker} adăugat în watchlist.")
+                if selected_ticker:
+                    add_to_watchlist(selected_ticker)
+                    st.success(f"{selected_ticker} adăugat în watchlist.")
                     st.rerun()
-                else:
-                    st.warning("Selectează un ticker din tabel.")
         with c2:
             if st.button("Refresh page", width="stretch"):
                 st.rerun()
         with c3:
-            if selected:
-                row = selected[0]
-                st.markdown(
-                    f"<div class='small-muted'>Selectat: <b>{row['ticker']}</b> • Score {row['score']} • "
-                    f"Vol {row['vol_ratio']} • Buy Value {row['insider_buy_value']}</div>",
-                    unsafe_allow_html=True,
-                )
+            row = df[df["ticker"] == selected_ticker].iloc[0]
+            st.markdown(
+                f"<div class='small-muted'>Selectat: <b>{row['ticker']}</b> • Score {row['score']} • "
+                f"Vol {row['vol_ratio']} • Buy Value {row['insider_buy_value']}</div>",
+                unsafe_allow_html=True,
+            )
 
 with tab_watchlist:
     st.markdown('<div class="section-title">Manage Watchlist</div>', unsafe_allow_html=True)
@@ -394,27 +350,33 @@ with tab_watchlist:
         if df_w.empty:
             st.info("Tickerele există în watchlist, dar nu au încă date în enriched.")
         else:
-            grid_w = aggrid_table(df_w, "watchlist_grid")
-            selected_w = normalize_selected(grid_w)
+            st.dataframe(
+                df_w,
+                width="stretch",
+                hide_index=True,
+                height=430,
+            )
+
+            selected_watch_ticker = st.selectbox(
+                "Selectează ticker din watchlist",
+                df_w["ticker"].tolist(),
+                key="watchlist_select"
+            )
 
             c1, c2, c3 = st.columns([1.2, 1.2, 6])
             with c1:
                 if st.button("Remove selected", width="stretch"):
-                    if selected_w:
-                        ticker = selected_w[0]["ticker"]
-                        remove_from_watchlist(ticker)
-                        st.success(f"{ticker} șters din watchlist.")
+                    if selected_watch_ticker:
+                        remove_from_watchlist(selected_watch_ticker)
+                        st.success(f"{selected_watch_ticker} șters din watchlist.")
                         st.rerun()
-                    else:
-                        st.warning("Selectează un ticker din tabel.")
             with c2:
                 if st.button("Reload", width="stretch"):
                     st.rerun()
             with c3:
-                if selected_w:
-                    row = selected_w[0]
-                    st.markdown(
-                        f"<div class='small-muted'>Selectat: <b>{row['ticker']}</b> • Score {row['score']} • "
-                        f"Vol {row['vol_ratio']} • Updated {row['enrich_date']}</div>",
-                        unsafe_allow_html=True,
-                    )
+                row = df_w[df_w["ticker"] == selected_watch_ticker].iloc[0]
+                st.markdown(
+                    f"<div class='small-muted'>Selectat: <b>{row['ticker']}</b> • Score {row['score']} • "
+                    f"Vol {row['vol_ratio']} • Updated {row['enrich_date']}</div>",
+                    unsafe_allow_html=True,
+                )
