@@ -8,7 +8,7 @@ sys.path.insert(0, ".")
 from datetime import date
 import pandas as pd
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+from st_aggrid import AgGrid, GridOptionsBuilder
 
 from app.db import (
     get_enriched,
@@ -24,8 +24,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-# ── STYLE ────────────────────────────────────────────────────────────────────
 
 st.markdown("""
 <style>
@@ -67,8 +65,6 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
-
-# ── HELPERS ──────────────────────────────────────────────────────────────────
 
 def fmt_money(v):
     if v is None or v == 0:
@@ -231,7 +227,8 @@ def aggrid_table(df: pd.DataFrame, key: str):
     gb.configure_column("insider_sells_90d", header_name="Sells 90d", width=100)
     gb.configure_column("short_interest_pct", header_name="Short %", width=95)
     gb.configure_column("pe_ratio", header_name="P/E", width=85)
-    gb.configure_column("market_cap", header_name="Mkt Cap", width=110)
+    if "market_cap" in df.columns:
+        gb.configure_column("market_cap", header_name="Mkt Cap", width=110)
     gb.configure_column("sector", width=130)
     gb.configure_column("industry", width=160)
     gb.configure_column("enrich_date", header_name="Updated", width=110)
@@ -241,12 +238,21 @@ def aggrid_table(df: pd.DataFrame, key: str):
         gridOptions=gb.build(),
         height=420,
         fit_columns_on_grid_load=False,
-        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        update_on=["selectionChanged"],
         theme="balham",
         key=key,
-        reload_data=True,
     )
-    return grid
+    return grid or {"selected_rows": []}
+
+def normalize_selected(grid_result):
+    if not grid_result:
+        return []
+    selected = grid_result.get("selected_rows", [])
+    if selected is None:
+        return []
+    if isinstance(selected, pd.DataFrame):
+        return selected.to_dict("records")
+    return selected
 
 def load_scanner_data(days_back: int, min_score: int):
     try:
@@ -261,8 +267,6 @@ def load_watchlist_data():
     except Exception as e:
         st.error(f"Eroare conexiune DB: {e}")
         st.stop()
-
-# ── SIDEBAR ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.markdown("## 📈 Smart Money Screener")
@@ -280,8 +284,6 @@ with st.sidebar:
     st.caption("08:45 ET — enrich dimineața")
     st.caption("16:30 ET — enrich după închidere")
 
-# ── HEADER ───────────────────────────────────────────────────────────────────
-
 st.markdown("""
 <div class="hero">
     <div class="hero-title">Smart Money Screener</div>
@@ -292,8 +294,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 tab_scanner, tab_watchlist = st.tabs(["Scanner", "Watchlist"])
-
-# ── TAB SCANNER ──────────────────────────────────────────────────────────────
 
 with tab_scanner:
     raw = load_scanner_data(days_back=days_back, min_score=min_score)
@@ -318,18 +318,18 @@ with tab_scanner:
                 "vol_ratio": "Vol Ratio",
                 "insider_buys_90d": "Buys 90d",
             }),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
         st.markdown('<div class="section-title">Candidates</div>', unsafe_allow_html=True)
         grid = aggrid_table(df, "scanner_grid")
-        selected = grid.get("selected_rows", [])
+        selected = normalize_selected(grid)
 
         c1, c2, c3 = st.columns([1.2, 1.2, 6])
         with c1:
-            if st.button("Add selected", use_container_width=True, type="primary"):
-                if len(selected) > 0:
+            if st.button("Add selected", width="stretch", type="primary"):
+                if selected:
                     ticker = selected[0]["ticker"]
                     add_to_watchlist(ticker)
                     st.success(f"{ticker} adăugat în watchlist.")
@@ -337,18 +337,16 @@ with tab_scanner:
                 else:
                     st.warning("Selectează un ticker din tabel.")
         with c2:
-            if st.button("Refresh page", use_container_width=True):
+            if st.button("Refresh page", width="stretch"):
                 st.rerun()
         with c3:
-            if len(selected) > 0:
+            if selected:
                 row = selected[0]
                 st.markdown(
                     f"<div class='small-muted'>Selectat: <b>{row['ticker']}</b> • Score {row['score']} • "
                     f"Vol {row['vol_ratio']} • Buy Value {row['insider_buy_value']}</div>",
                     unsafe_allow_html=True,
                 )
-
-# ── TAB WATCHLIST ────────────────────────────────────────────────────────────
 
 with tab_watchlist:
     st.markdown('<div class="section-title">Manage Watchlist</div>', unsafe_allow_html=True)
@@ -362,7 +360,7 @@ with tab_watchlist:
         with c3:
             st.write("")
             st.write("")
-            submitted = st.form_submit_button("Add", use_container_width=True)
+            submitted = st.form_submit_button("Add", width="stretch")
 
         if submitted:
             ticker = (new_ticker or "").upper().strip()
@@ -397,12 +395,12 @@ with tab_watchlist:
             st.info("Tickerele există în watchlist, dar nu au încă date în enriched.")
         else:
             grid_w = aggrid_table(df_w, "watchlist_grid")
-            selected_w = grid_w.get("selected_rows", [])
+            selected_w = normalize_selected(grid_w)
 
             c1, c2, c3 = st.columns([1.2, 1.2, 6])
             with c1:
-                if st.button("Remove selected", use_container_width=True):
-                    if len(selected_w) > 0:
+                if st.button("Remove selected", width="stretch"):
+                    if selected_w:
                         ticker = selected_w[0]["ticker"]
                         remove_from_watchlist(ticker)
                         st.success(f"{ticker} șters din watchlist.")
@@ -410,10 +408,10 @@ with tab_watchlist:
                     else:
                         st.warning("Selectează un ticker din tabel.")
             with c2:
-                if st.button("Reload", use_container_width=True):
+                if st.button("Reload", width="stretch"):
                     st.rerun()
             with c3:
-                if len(selected_w) > 0:
+                if selected_w:
                     row = selected_w[0]
                     st.markdown(
                         f"<div class='small-muted'>Selectat: <b>{row['ticker']}</b> • Score {row['score']} • "
