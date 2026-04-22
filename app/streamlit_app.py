@@ -1,5 +1,5 @@
 """
-Premium Streamlit UI — varianta stabilă fără AgGrid.
+Premium Streamlit UI — varianta stabilă fără componente fragile.
 Păstrează structura proiectului și backend-ul Supabase.
 """
 import sys
@@ -13,6 +13,7 @@ from app.db import (
     get_enriched,
     get_watchlist,
     get_watchlist_enriched,
+    get_ticker_history,
     add_to_watchlist,
     remove_from_watchlist,
 )
@@ -26,11 +27,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-.block-container {
-    padding-top: 1.2rem;
-    padding-bottom: 1.5rem;
-    max-width: 1500px;
-}
+.block-container {padding-top: 1.2rem; padding-bottom: 1.5rem; max-width: 1500px;}
 [data-testid="stMetric"] {
     background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
     border: 1px solid rgba(255,255,255,0.08);
@@ -38,36 +35,20 @@ st.markdown("""
     padding: 14px 16px;
 }
 .hero {
-    padding: 18px 20px;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 18px;
-    background: linear-gradient(135deg, rgba(36,36,52,0.95), rgba(20,20,30,0.95));
+    padding: 18px 20px; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 18px; background: linear-gradient(135deg, rgba(36,36,52,0.95), rgba(20,20,30,0.95));
     margin-bottom: 14px;
 }
-.hero-title {
-    font-size: 1.55rem;
-    font-weight: 700;
-    margin-bottom: 4px;
-}
-.hero-sub {
-    color: #9aa4b2;
-    font-size: 0.92rem;
-}
-.section-title {
-    font-size: 1.08rem;
-    font-weight: 700;
-    margin: 8px 0 10px 0;
-}
-.small-muted {
-    color: #9aa4b2;
-    font-size: 0.84rem;
-}
+.hero-title {font-size: 1.55rem; font-weight: 700; margin-bottom: 4px;}
+.hero-sub {color: #9aa4b2; font-size: 0.92rem;}
+.section-title {font-size: 1.08rem; font-weight: 700; margin: 8px 0 10px 0;}
+.small-muted {color: #9aa4b2; font-size: 0.84rem;}
 .card {
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 16px;
     padding: 14px 16px;
     background: rgba(255,255,255,0.02);
-    margin-bottom: 10px;
+    margin-bottom: 12px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -122,12 +103,24 @@ def score_signal(score):
     return "🔴 Weak"
 
 
+def short_interest_label(v):
+    try:
+        v = float(v)
+    except Exception:
+        return "Unknown"
+    if v < 5:
+        return "Low"
+    if v < 10:
+        return "Medium"
+    if v < 20:
+        return "High"
+    return "Very high"
+
+
 def build_scanner_df(rows: list[dict]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
-
     df = pd.DataFrame(rows).copy()
-
     wanted = [
         "ticker", "score", "price", "vol_ratio", "volume", "avg_volume_20d",
         "insider_buys_90d", "insider_buy_value", "insider_sells_90d",
@@ -150,7 +143,6 @@ def build_scanner_df(rows: list[dict]) -> pd.DataFrame:
     df["short_interest_pct"] = df["short_interest_pct"].apply(fmt_pct)
     df["pe_ratio"] = df["pe_ratio"].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "—")
     df["market_cap"] = df["market_cap"].apply(fmt_money)
-
     return df[[
         "ticker", "score", "signal", "price", "vol_ratio", "volume",
         "avg_volume_20d", "insider_buys_90d", "insider_buy_value",
@@ -162,9 +154,7 @@ def build_scanner_df(rows: list[dict]) -> pd.DataFrame:
 def build_watchlist_df(rows: list[dict]) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
-
     df = pd.DataFrame(rows).copy()
-
     wanted = [
         "ticker", "score", "price", "vol_ratio", "insider_buys_90d",
         "insider_buy_value", "insider_sells_90d", "short_interest_pct",
@@ -183,7 +173,6 @@ def build_watchlist_df(rows: list[dict]) -> pd.DataFrame:
     df["insider_sells_90d"] = df["insider_sells_90d"].fillna(0).astype(int)
     df["short_interest_pct"] = df["short_interest_pct"].apply(fmt_pct)
     df["pe_ratio"] = df["pe_ratio"].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "—")
-
     return df[[
         "ticker", "score", "signal", "price", "vol_ratio",
         "insider_buys_90d", "insider_buy_value", "insider_sells_90d",
@@ -196,7 +185,6 @@ def render_kpis(df: pd.DataFrame):
     avg_score = int(df["score"].mean()) if total else 0
     top_score = int(df["score"].max()) if total else 0
     top_ticker = df.sort_values("score", ascending=False).iloc[0]["ticker"] if total else "—"
-
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Candidates", total)
     c2.metric("Average score", avg_score)
@@ -220,6 +208,65 @@ def load_watchlist_data():
         st.stop()
 
 
+def show_ticker_panel(ticker: str):
+    history = get_ticker_history(ticker, limit=10)
+    if not history:
+        st.info("Nu există istoric pentru tickerul selectat.")
+        return
+
+    latest = history[-1]
+    prev = history[-2] if len(history) >= 2 else None
+    score_delta = latest.get("score", 0) - (prev.get("score", 0) if prev else 0)
+
+    st.markdown("<div class='section-title'>Ticker Intelligence</div>", unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Ticker", latest.get("ticker", "—"))
+    c2.metric("Score", latest.get("score", 0), delta=score_delta)
+    c3.metric("Vol ratio", f"{float(latest.get('vol_ratio') or 0):.2f}x" if latest.get("vol_ratio") is not None else "—")
+    c4.metric("Short interest", fmt_pct(latest.get("short_interest_pct")))
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Score volume", latest.get("score_volume", 0))
+    c2.metric("Score insider", latest.get("score_insider", 0))
+    c3.metric("Score short", latest.get("score_short_interest", 0))
+    c4.metric("Score fundamental", latest.get("score_fundamental", 0))
+    c5.metric("Penalty", latest.get("score_penalty", 0))
+
+    left, right = st.columns([1.2, 1])
+    with left:
+        hist_df = pd.DataFrame(history)
+        chart_df = hist_df[["enrich_date", "score"]].copy()
+        chart_df["enrich_date"] = pd.to_datetime(chart_df["enrich_date"])
+        chart_df = chart_df.set_index("enrich_date")
+        st.line_chart(chart_df, height=220, width="stretch")
+
+        display = hist_df[[
+            "enrich_date", "score", "vol_ratio", "insider_buys_90d",
+            "insider_buy_value", "insider_sells_90d", "short_interest_pct"
+        ]].copy()
+        display["insider_buy_value"] = display["insider_buy_value"].apply(fmt_money)
+        display["short_interest_pct"] = display["short_interest_pct"].apply(fmt_pct)
+        display["vol_ratio"] = display["vol_ratio"].apply(lambda x: f"{float(x):.2f}x" if pd.notna(x) else "—")
+        st.dataframe(display, width="stretch", hide_index=True)
+
+    with right:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown(f"**Volume signal:** {latest.get('volume_signal') or '—'}")
+        st.markdown(f"**Insider signal:** {latest.get('insider_signal') or '—'}")
+        st.markdown(f"**Short signal:** {latest.get('short_signal') or '—'}")
+        st.markdown(f"**Thesis:** {latest.get('thesis') or '—'}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("**Interpretare rapidă**")
+        st.markdown("- **Score**: 70+ strong, 45–69 neutral, sub 45 weak")
+        st.markdown("- **Vol ratio**: >2 unusual, >5 extreme")
+        si = latest.get("short_interest_pct")
+        st.markdown(f"- **Short interest curent**: {fmt_pct(si)} → {short_interest_label(si)}")
+        st.markdown("- **Insider**: valoarea cumpărărilor contează mai mult decât numărul")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
 with st.sidebar:
     st.markdown("## 📈 Smart Money Screener")
     st.caption(f"Astăzi: {date.today().strftime('%d %b %Y')}")
@@ -227,15 +274,15 @@ with st.sidebar:
 
     st.markdown("### Scanner Filters")
     min_score = st.slider("Score minim", 0, 100, 30, 5)
-    days_back = st.selectbox("Perioada", [1, 2, 3, 5], format_func=lambda x: f"Ultimele {x} zile")
+    days_back = st.selectbox("Perioada", [1, 2, 3, 5, 10], format_func=lambda x: f"Ultimele {x} zile")
     search_ticker = st.text_input("Caută ticker", placeholder="ex: NVDA").upper().strip()
 
     st.divider()
-    st.markdown("### Info")
-    st.caption("Actualizat 2x/zi via GitHub Actions")
-    st.caption("08:45 ET — enrich dimineața")
-    st.caption("16:30 ET — enrich după închidere")
-
+    st.markdown("### Legendă")
+    st.caption("Score 70+ = strong")
+    st.caption("Vol ratio >2 = unusual, >5 = extreme")
+    st.caption("Short interest <5% low, 5–10% medium, >10% high")
+    st.caption("Insider buys: valoarea este mai importantă decât count")
 
 st.markdown("""
 <div class="hero">
@@ -256,43 +303,19 @@ with tab_scanner:
         df = df[df["ticker"].str.contains(search_ticker, case=False, na=False)]
 
     st.markdown('<div class="section-title">Scanner Overview</div>', unsafe_allow_html=True)
-
     if df.empty:
         st.info("Niciun candidat pentru filtrele curente.")
     else:
         render_kpis(df)
+        st.dataframe(df, width="stretch", hide_index=True, height=430)
 
-        top5 = df.sort_values("score", ascending=False).head(5)[["ticker", "score", "vol_ratio", "insider_buys_90d"]]
-        st.markdown('<div class="small-muted">Top 5 după scor</div>', unsafe_allow_html=True)
-        st.dataframe(
-            top5.rename(columns={
-                "ticker": "Ticker",
-                "score": "Score",
-                "vol_ratio": "Vol Ratio",
-                "insider_buys_90d": "Buys 90d",
-            }),
-            width="stretch",
-            hide_index=True,
-        )
-
-        st.markdown('<div class="section-title">Candidates</div>', unsafe_allow_html=True)
-        st.dataframe(
-            df,
-            width="stretch",
-            hide_index=True,
-            height=430,
-        )
-
-        ticker_options = df["ticker"].tolist()
-        selected_ticker = st.selectbox("Selectează ticker pentru acțiune", ticker_options, key="scanner_select")
-
+        selected_ticker = st.selectbox("Selectează ticker pentru analiză", df["ticker"].tolist(), key="scanner_select")
         c1, c2, c3 = st.columns([1.2, 1.2, 6])
         with c1:
             if st.button("Add selected", width="stretch", type="primary"):
-                if selected_ticker:
-                    add_to_watchlist(selected_ticker)
-                    st.success(f"{selected_ticker} adăugat în watchlist.")
-                    st.rerun()
+                add_to_watchlist(selected_ticker)
+                st.success(f"{selected_ticker} adăugat în watchlist.")
+                st.rerun()
         with c2:
             if st.button("Refresh page", width="stretch"):
                 st.rerun()
@@ -303,6 +326,7 @@ with tab_scanner:
                 f"Vol {row['vol_ratio']} • Buy Value {row['insider_buy_value']}</div>",
                 unsafe_allow_html=True,
             )
+        show_ticker_panel(selected_ticker)
 
 with tab_watchlist:
     st.markdown('<div class="section-title">Manage Watchlist</div>', unsafe_allow_html=True)
@@ -317,7 +341,6 @@ with tab_watchlist:
             st.write("")
             st.write("")
             submitted = st.form_submit_button("Add", width="stretch")
-
         if submitted:
             ticker = (new_ticker or "").upper().strip()
             if ticker:
@@ -345,31 +368,17 @@ with tab_watchlist:
         if missing:
             st.warning("Fără date enrich încă: " + ", ".join(missing))
 
-        st.markdown('<div class="section-title">Watchlist Table</div>', unsafe_allow_html=True)
-
         if df_w.empty:
             st.info("Tickerele există în watchlist, dar nu au încă date în enriched.")
         else:
-            st.dataframe(
-                df_w,
-                width="stretch",
-                hide_index=True,
-                height=430,
-            )
-
-            selected_watch_ticker = st.selectbox(
-                "Selectează ticker din watchlist",
-                df_w["ticker"].tolist(),
-                key="watchlist_select"
-            )
-
+            st.dataframe(df_w, width="stretch", hide_index=True, height=430)
+            selected_watch_ticker = st.selectbox("Selectează ticker din watchlist", df_w["ticker"].tolist(), key="watchlist_select")
             c1, c2, c3 = st.columns([1.2, 1.2, 6])
             with c1:
                 if st.button("Remove selected", width="stretch"):
-                    if selected_watch_ticker:
-                        remove_from_watchlist(selected_watch_ticker)
-                        st.success(f"{selected_watch_ticker} șters din watchlist.")
-                        st.rerun()
+                    remove_from_watchlist(selected_watch_ticker)
+                    st.success(f"{selected_watch_ticker} șters din watchlist.")
+                    st.rerun()
             with c2:
                 if st.button("Reload", width="stretch"):
                     st.rerun()
@@ -380,3 +389,4 @@ with tab_watchlist:
                     f"Vol {row['vol_ratio']} • Updated {row['enrich_date']}</div>",
                     unsafe_allow_html=True,
                 )
+            show_ticker_panel(selected_watch_ticker)

@@ -1,19 +1,11 @@
 """
 Enrich — colecteaza semnale smart money pentru candidatii din scan.
 Ruleaza de 2x/zi: 08:45 ET si 16:30 ET.
-
-Surse confirmate gratuite:
-  FMP /stable/profile                — market cap, sector, PE
-  FMP /stable/insider-trading/latest — insider trades recente
-  yfinance                           — short interest
-
-FMP calls per run: ~2 x nr_candidati (max 50) = ~100 calls din 250/zi
+Compatibil cu surse gratuite si consum moderat de API.
 """
 import os
 import sys
 import time
-from datetime import date, timedelta
-
 import requests
 import yfinance as yf
 
@@ -21,19 +13,16 @@ FMP_KEY = os.environ.get("FMP_KEY", "")
 FMP_BASE = "https://financialmodelingprep.com/stable"
 
 
-
 def fmp_get(endpoint: str, params: dict | None = None) -> list | dict:
-    """Generic FMP call cu error handling."""
     params = params or {}
     try:
-        p = {**params, "apikey": FMP_KEY}
-        r = requests.get(f"{FMP_BASE}/{endpoint}", params=p, timeout=20)
+        payload = {**params, "apikey": FMP_KEY}
+        r = requests.get(f"{FMP_BASE}/{endpoint}", params=payload, timeout=20)
         r.raise_for_status()
         return r.json()
     except Exception as e:
         print(f"  FMP {endpoint} error: {e}")
         return {}
-
 
 
 def get_profile(ticker: str) -> dict:
@@ -45,30 +34,17 @@ def get_profile(ticker: str) -> dict:
     else:
         return {}
 
-    pe_ratio = p.get("pe") or p.get("peRatio")
-    inst_ownership_pct = p.get("institutionalOwnershipPercentage")
-
-    try:
-        pe_ratio = float(pe_ratio) if pe_ratio is not None else None
-    except Exception:
-        pe_ratio = None
-
-    try:
-        inst_ownership_pct = float(inst_ownership_pct) if inst_ownership_pct is not None else None
-    except Exception:
-        inst_ownership_pct = None
-
     return {
         "sector": p.get("sector") or "",
         "industry": p.get("industry") or "",
-        "pe_ratio": pe_ratio,
+        "pe_ratio": p.get("pe") or p.get("peRatio"),
         "market_cap": int(p.get("mktCap") or p.get("marketCap") or 0),
-        "inst_ownership_pct": inst_ownership_pct,
+        "inst_ownership_pct": p.get("institutionalOwnershipPercentage"),
     }
 
 
-
 def get_insider_trades_fmp(ticker: str, days_back: int = 90) -> dict:
+    from datetime import date, timedelta
     since = (date.today() - timedelta(days=days_back)).isoformat()
 
     data = fmp_get("insider-trading/latest", {
@@ -89,17 +65,8 @@ def get_insider_trades_fmp(ticker: str, days_back: int = 90) -> dict:
             continue
 
         tx_type = (trade.get("transactionType") or trade.get("acquistionOrDisposition") or "").upper()
-
-        try:
-            shares = abs(float(trade.get("securitiesTransacted") or trade.get("shares") or 0))
-        except Exception:
-            shares = 0.0
-
-        try:
-            price = float(trade.get("price") or trade.get("transactionPrice") or 0)
-        except Exception:
-            price = 0.0
-
+        shares = abs(float(trade.get("securitiesTransacted") or trade.get("shares") or 0))
+        price = float(trade.get("price") or trade.get("transactionPrice") or 0)
         value = shares * price
 
         if tx_type in ("P", "A", "PURCHASE", "P-PURCHASE", "BUY"):
@@ -115,68 +82,142 @@ def get_insider_trades_fmp(ticker: str, days_back: int = 90) -> dict:
     }
 
 
-
 def get_short_interest(ticker: str) -> dict:
-    """yfinance pentru short interest — gratuit."""
     try:
         info = yf.Ticker(ticker).info
-        si = info.get("shortPercentOfFloat")
-        if si is None:
-            return {"short_interest_pct": None}
-        si = float(si)
-        return {"short_interest_pct": round(si * 100, 2) if si < 1 else round(si, 2)}
+        si = info.get("shortPercentOfFloat") or 0
+        return {"short_interest_pct": round(si * 100, 2) if si and si < 1 else round(si, 2)}
     except Exception:
         return {"short_interest_pct": None}
 
 
+def score_volume(vol_ratio: float | int | None) -> tuple[int, str]:
+    v = float(vol_ratio or 0)
+    if v >= 5:
+        return 25, "Extreme volume spike (>5x)"
+    if v >= 3:
+        return 15, "Strong unusual volume (>3x)"
+    if v >= 2:
+        return 8, "Unusual volume (>2x)"
+    return 0, "Normal volume"
 
-def calculate_score(data: dict) -> int:
+
+def score_insider(buys: int, buy_value: float, sells: int) -> tuple[int, int, str]:
     score = 0
+    penalty = 0
 
-    vol = data.get("vol_ratio") or 1.0
-    if vol >= 5:
-        score += 25
-    elif vol >= 3:
-        score += 15
-    elif vol >= 2:
-        score += 8
-
-    buys = data.get("insider_buys_90d") or 0
-    val = data.get("insider_buy_value") or 0
-    if val >= 1_000_000:
+    if buy_value >= 1_000_000:
         score += 35
-    elif val >= 250_000:
+    elif buy_value >= 250_000:
         score += 20
     elif buys >= 3:
         score += 20
     elif buys >= 1:
         score += 10
 
-    si = data.get("short_interest_pct")
-    if si is not None:
-        if 0 < si <= 5:
-            score += 10
-        elif si <= 15:
-            score += 5
-        elif si > 30:
-            score -= 10
+    if sells >= 10:
+        penalty -= 12
+    elif sells >= 5:
+        penalty -= 6
+    elif sells >= 1:
+        penalty -= 2
 
-    inst = data.get("inst_ownership_pct")
-    if inst is not None:
-        if inst >= 60:
-            score += 10
-        elif inst >= 40:
-            score += 5
+    if buy_value >= 1_000_000:
+        signal = "Strong insider conviction"
+    elif buys >= 1:
+        signal = "Some insider buying detected"
+    elif sells >= 5:
+        signal = "Heavy insider selling"
+    elif sells >= 1:
+        signal = "Some insider selling"
+    else:
+        signal = "No meaningful insider activity"
 
-    pe = data.get("pe_ratio")
-    if pe is not None:
-        if 5 <= pe <= 25:
-            score += 10
-        elif 25 < pe <= 40:
-            score += 5
+    return score, penalty, signal
 
-    return max(0, min(100, score))
 
+def score_short_interest(si: float | None) -> tuple[int, str]:
+    if si is None:
+        return 0, "Short interest unavailable"
+    s = float(si)
+    if 0 < s <= 5:
+        return 10, "Low short interest (<5%)"
+    if s <= 15:
+        return 5, "Moderate short interest (5-15%)"
+    if s <= 25:
+        return 0, "High short interest (watch risk)"
+    return -10, "Very high short interest (>25%)"
+
+
+def score_fundamental(pe_ratio: float | None, inst_ownership_pct: float | None) -> tuple[int, str]:
+    score = 0
+    notes = []
+
+    pe = float(pe_ratio or 0)
+    inst = float(inst_ownership_pct or 0)
+
+    if 5 <= pe <= 25:
+        score += 10
+        notes.append("P/E in reasonable range")
+    elif 25 < pe <= 40:
+        score += 5
+        notes.append("P/E acceptable but not cheap")
+    elif pe > 40:
+        notes.append("P/E elevated")
+
+    if inst >= 60:
+        score += 10
+        notes.append("Strong institutional ownership")
+    elif inst >= 40:
+        score += 5
+        notes.append("Decent institutional ownership")
+
+    return score, "; ".join(notes) if notes else "Limited fundamental support"
+
+
+def build_thesis(data: dict) -> str:
+    parts = []
+    if (data.get("score_volume") or 0) >= 15:
+        parts.append("volume unusual")
+    if (data.get("score_insider") or 0) >= 20:
+        parts.append("insider buying meaningful")
+    if (data.get("score_short_interest") or 0) > 0:
+        parts.append("short interest manageable")
+    if (data.get("score_fundamental") or 0) >= 10:
+        parts.append("fundamentals acceptable")
+    if (data.get("score_penalty") or 0) < 0:
+        parts.append("but insider selling tempers conviction")
+
+    if not parts:
+        return "Weak setup. Mostly watchlist candidate, not high-conviction."
+
+    return ", ".join(parts).capitalize() + "."
+
+
+def calculate_scores(data: dict) -> dict:
+    vol_score, vol_signal = score_volume(data.get("vol_ratio"))
+    insider_score, penalty, insider_signal = score_insider(
+        int(data.get("insider_buys_90d") or 0),
+        float(data.get("insider_buy_value") or 0),
+        int(data.get("insider_sells_90d") or 0),
+    )
+    short_score, short_signal = score_short_interest(data.get("short_interest_pct"))
+    fundamental_score, _ = score_fundamental(data.get("pe_ratio"), data.get("inst_ownership_pct"))
+
+    total = vol_score + insider_score + short_score + fundamental_score + penalty
+    total = max(0, min(100, total))
+
+    data["score_volume"] = vol_score
+    data["score_insider"] = insider_score
+    data["score_short_interest"] = short_score
+    data["score_fundamental"] = fundamental_score
+    data["score_penalty"] = penalty
+    data["score"] = total
+    data["volume_signal"] = vol_signal
+    data["insider_signal"] = insider_signal
+    data["short_signal"] = short_signal
+    data["thesis"] = build_thesis(data)
+    return data
 
 
 def enrich_candidates(candidates: list[dict]) -> list[dict]:
@@ -190,27 +231,19 @@ def enrich_candidates(candidates: list[dict]) -> list[dict]:
 
     for i, candidate in enumerate(candidates):
         ticker = candidate["ticker"]
-        data = {
-            "ticker": ticker,
-            "price": candidate.get("price"),
-            "volume": candidate.get("volume"),
-            "avg_volume_20d": candidate.get("avg_volume_20d"),
-            "vol_ratio": candidate.get("vol_ratio"),
-        }
+        data = {**candidate}
         print(f"  [{i+1}/{total}] {ticker}")
 
         profile = get_profile(ticker)
         data.update(profile)
-        time.sleep(0.3)
+        time.sleep(0.25)
 
         insider = get_insider_trades_fmp(ticker)
         data.update(insider)
-        time.sleep(0.3)
+        time.sleep(0.25)
 
-        si = get_short_interest(ticker)
-        data.update(si)
-
-        data["score"] = calculate_score(data)
+        data.update(get_short_interest(ticker))
+        data = calculate_scores(data)
         enriched.append(data)
 
     enriched.sort(key=lambda x: x["score"], reverse=True)
@@ -236,6 +269,6 @@ if __name__ == "__main__":
         for e in enriched[:10]:
             print(
                 f"  {e['ticker']:<8} score={e['score']}/100 "
-                f"buys={e.get('insider_buys_90d', 0)} "
-                f"vol={e.get('vol_ratio', 0)}x"
+                f"vol={e.get('score_volume',0)} insider={e.get('score_insider',0)} "
+                f"short={e.get('score_short_interest',0)} pen={e.get('score_penalty',0)}"
             )
