@@ -80,6 +80,7 @@ def fetch_sp_midsmall() -> list[str]:
     sources = [
         ("S&P400", "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"),
         ("S&P600", "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"),
+        ("S&P500", "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"),
     ]
     tickers = []
     for name, url in sources:
