@@ -163,15 +163,11 @@ def safe_get(row, *keys):
 # ── AI Interpretation via Claude Haiku ────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def get_haiku_interpretation(ticker: str, data: dict) -> str:
-    """
-    Trimite semnalele unui ticker la Claude Haiku și primește
-    o interpretare concisă în 3-4 propoziții.
-    Cached 1 oră per ticker.
-    """
     if not ANTHROPIC_KEY:
         return ""
 
-    prompt = f"""Ești un analist financiar concis. Analizează aceste semnale pentru {ticker} și oferă o interpretare în 3 propoziții. Fii direct, specific și sincer în privința punctelor slabe. ...""".
+    # Am eliminat punctul extra și am unit textul corect
+    prompt = f"""Ești un analist financiar concis. Analizează aceste semnale pentru {ticker} și oferă o interpretare în 3 propoziții. Fii direct, specific și sincer în privința punctelor slabe.
 
 Signals:
 - Score: {data.get('score', 0)}/100
@@ -197,7 +193,7 @@ Scrie 3 propoziții: (1) ce sugerează combinația dintre volum și activitatea 
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-haiku-4-5-20251001",
+                "model": "claude-3-haiku-20240307", # Model corectat
                 "max_tokens": 200,
                 "messages": [{"role": "user", "content": prompt}],
             },
