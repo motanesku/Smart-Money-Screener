@@ -5,27 +5,14 @@ import os
 from datetime import date, timedelta
 from supabase import create_client, Client
 
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
-
-
-_client: Client | None = None
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 
 def get_client() -> Client:
-    global _client
-
-    if not SUPABASE_URL:
-        raise RuntimeError("SUPABASE_URL lipsește")
-    if not SUPABASE_KEY:
-        raise RuntimeError("SUPABASE_KEY lipsește")
     if not SUPABASE_URL.startswith("https://"):
-        raise RuntimeError("SUPABASE_URL este invalid. Trebuie să înceapă cu https://")
-
-    if _client is None:
-        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    return _client
+        raise ValueError("SUPABASE_URL trebuie sa inceapa cu https://")
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 # ── UNIVERSE ─────────────────────────────────────────────────────────────────
@@ -34,14 +21,28 @@ def save_universe(tickers: list[dict]):
     if not tickers:
         return
     sb = get_client()
-    sb.table("universe").upsert(tickers, on_conflict="ticker").execute()
-
+    rows = []
+    for t in tickers:
+        rows.append({
+            "ticker": t.get("ticker", "").upper(),
+            "company_name": t.get("company_name", ""),
+            "exchange": t.get("exchange", ""),
+            "sector": t.get("sector", ""),
+            "industry": t.get("industry", ""),
+            "market_cap": int(t.get("market_cap") or 0),
+            "avg_volume_20d": int(t.get("avg_volume_20d") or 0),
+        })
+    sb.table("universe").upsert(rows, on_conflict="ticker").execute()
 
 
 def get_universe() -> list[dict]:
     sb = get_client()
-    res = sb.table("universe").select("ticker,company_name,sector,market_cap,avg_volume").execute()
-    return res.data or []
+    res = (
+        sb.table("universe")
+        .select("ticker,company_name,sector,market_cap,avg_volume_20d")
+        .execute()
+    )
+    return res.data
 
 
 # ── SCAN ─────────────────────────────────────────────────────────────────────
@@ -51,9 +52,17 @@ def save_scan_results(results: list[dict]):
         return
     sb = get_client()
     today = date.today().isoformat()
-    rows = [{**r, "scan_date": today} for r in results]
+    rows = []
+    for r in results:
+        rows.append({
+            "scan_date": today,
+            "ticker": r.get("ticker", "").upper(),
+            "price": r.get("price"),
+            "volume": int(r.get("volume") or 0),
+            "avg_volume_20d": int(r.get("avg_volume_20d") or 0),
+            "vol_ratio": r.get("vol_ratio"),
+        })
     sb.table("scan_results").upsert(rows, on_conflict="scan_date,ticker").execute()
-
 
 
 def get_scan_results(days_back: int = 1) -> list[dict]:
@@ -66,7 +75,7 @@ def get_scan_results(days_back: int = 1) -> list[dict]:
         .order("vol_ratio", desc=True)
         .execute()
     )
-    return res.data or []
+    return res.data
 
 
 # ── ENRICH ───────────────────────────────────────────────────────────────────
@@ -74,36 +83,29 @@ def get_scan_results(days_back: int = 1) -> list[dict]:
 def save_enriched(results: list[dict]):
     if not results:
         return
-
     sb = get_client()
     today = date.today().isoformat()
-
-    allowed_keys = {
-        "ticker",
-        "price",
-        "volume",
-        "avg_volume_20d",
-        "vol_ratio",
-        "insider_buys_90d",
-        "insider_buy_value",
-        "insider_sells_90d",
-        "inst_ownership_pct",
-        "pe_ratio",
-        "short_interest_pct",
-        "market_cap",
-        "sector",
-        "industry",
-        "score",
-    }
-
     rows = []
     for r in results:
-        clean = {k: v for k, v in r.items() if k in allowed_keys}
-        clean["enrich_date"] = today
-        rows.append(clean)
-
+        rows.append({
+            "enrich_date": today,
+            "ticker": r.get("ticker", "").upper(),
+            "price": r.get("price"),
+            "volume": int(r.get("volume") or 0),
+            "avg_volume_20d": int(r.get("avg_volume_20d") or 0),
+            "vol_ratio": r.get("vol_ratio"),
+            "insider_buys_90d": int(r.get("insider_buys_90d") or 0),
+            "insider_buy_value": float(r.get("insider_buy_value") or 0),
+            "insider_sells_90d": int(r.get("insider_sells_90d") or 0),
+            "inst_ownership_pct": r.get("inst_ownership_pct"),
+            "pe_ratio": r.get("pe_ratio"),
+            "short_interest_pct": r.get("short_interest_pct"),
+            "market_cap": int(r.get("market_cap") or 0),
+            "sector": r.get("sector", ""),
+            "industry": r.get("industry", ""),
+            "score": int(r.get("score") or 0),
+        })
     sb.table("enriched").upsert(rows, on_conflict="enrich_date,ticker").execute()
-
 
 
 def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:
@@ -117,16 +119,20 @@ def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:
         .order("score", desc=True)
         .execute()
     )
-    return res.data or []
+    return res.data
 
 
 # ── WATCHLIST ────────────────────────────────────────────────────────────────
 
 def get_watchlist() -> list[dict]:
     sb = get_client()
-    res = sb.table("watchlist").select("ticker,added_at,notes").order("added_at", desc=True).execute()
-    return res.data or []
-
+    res = (
+        sb.table("watchlist")
+        .select("ticker,added_at,notes")
+        .order("added_at", desc=True)
+        .execute()
+    )
+    return res.data
 
 
 def add_to_watchlist(ticker: str, notes: str = ""):
@@ -137,11 +143,9 @@ def add_to_watchlist(ticker: str, notes: str = ""):
     ).execute()
 
 
-
 def remove_from_watchlist(ticker: str):
     sb = get_client()
     sb.table("watchlist").delete().eq("ticker", ticker.upper()).execute()
-
 
 
 def get_watchlist_enriched() -> list[dict]:
@@ -159,10 +163,10 @@ def get_watchlist_enriched() -> list[dict]:
         .execute()
     )
 
-    seen, result = set(), []
-    for row in (res.data or []):
-        ticker = row.get("ticker")
-        if ticker and ticker not in seen:
-            seen.add(ticker)
+    seen = set()
+    result = []
+    for row in res.data:
+        if row["ticker"] not in seen:
+            seen.add(row["ticker"])
             result.append(row)
     return result
