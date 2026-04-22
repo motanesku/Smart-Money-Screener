@@ -16,12 +16,9 @@ def get_client() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# ── UNIVERSE ─────────────────────────────────────────────────────────────────
-
 def save_universe(tickers: list[dict]):
     if not tickers:
         return
-
     rows = []
     for t in tickers:
         rows.append({
@@ -31,30 +28,21 @@ def save_universe(tickers: list[dict]):
             "sector": t.get("sector") or "",
             "industry": t.get("industry") or "",
             "market_cap": int(t.get("market_cap") or 0),
-            # Pastram schema existenta: avg_volume
             "avg_volume": int(t.get("avg_volume") or t.get("avg_volume_20d") or 0),
         })
-
     sb = get_client()
     sb.table("universe").upsert(rows, on_conflict="ticker").execute()
 
 
 def get_universe() -> list[dict]:
     sb = get_client()
-    res = (
-        sb.table("universe")
-        .select("ticker,company_name,sector,industry,market_cap,avg_volume")
-        .execute()
-    )
+    res = sb.table("universe").select("ticker,company_name,sector,industry,market_cap,avg_volume").execute()
     return res.data
 
-
-# ── SCAN ─────────────────────────────────────────────────────────────────────
 
 def save_scan_results(results: list[dict]):
     if not results:
         return
-
     today = date.today().isoformat()
     rows = []
     for r in results:
@@ -66,7 +54,6 @@ def save_scan_results(results: list[dict]):
             "avg_volume_20d": int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
             "vol_ratio": r.get("vol_ratio"),
         })
-
     sb = get_client()
     sb.table("scan_results").upsert(rows, on_conflict="scan_date,ticker").execute()
 
@@ -84,24 +71,19 @@ def get_scan_results(days_back: int = 1) -> list[dict]:
     return res.data
 
 
-# ── ENRICH ───────────────────────────────────────────────────────────────────
-
 def save_enriched(results: list[dict]):
     if not results:
         return
-
     today = date.today().isoformat()
     rows = []
     for r in results:
         rows.append({
             "enrich_date": today,
             "ticker": (r.get("ticker") or "").upper(),
-            # snapshot fields utile in UI
             "price": r.get("price"),
             "volume": int(r.get("volume") or 0),
             "avg_volume_20d": int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
             "vol_ratio": r.get("vol_ratio"),
-            # signals existente
             "insider_buys_90d": int(r.get("insider_buys_90d") or 0),
             "insider_buy_value": float(r.get("insider_buy_value") or 0),
             "insider_sells_90d": int(r.get("insider_sells_90d") or 0),
@@ -109,7 +91,6 @@ def save_enriched(results: list[dict]):
             "pe_ratio": r.get("pe_ratio"),
             "short_interest_pct": r.get("short_interest_pct"),
             "score": int(r.get("score") or 0),
-            # coloane noi populate lazy
             "market_cap": int(r.get("market_cap") or 0),
             "sector": r.get("sector") or "",
             "industry": r.get("industry") or "",
@@ -122,8 +103,19 @@ def save_enriched(results: list[dict]):
             "insider_signal": r.get("insider_signal") or "",
             "short_signal": r.get("short_signal") or "",
             "thesis": r.get("thesis") or "",
+            "score_insider_quality": int(r.get("insider_quality_score") or 0),
+            "top_insider_role": r.get("top_insider_role") or "Unknown",
+            "ownership_form": r.get("ownership_form") or "",
+            "ownership_holder": r.get("ownership_holder") or "",
+            "ownership_pct": r.get("ownership_pct"),
+            "ownership_signal": r.get("ownership_signal") or "",
+            "score_ownership": int(r.get("score_ownership") or 0),
+            "short_sale_volume": int(r.get("short_sale_volume") or 0),
+            "total_volume_reported": int(r.get("total_volume_reported") or 0),
+            "short_sale_ratio": r.get("short_sale_ratio"),
+            "short_flow_signal": r.get("short_flow_signal") or "",
+            "score_short_flow": int(r.get("score_short_flow") or 0),
         })
-
     sb = get_client()
     sb.table("enriched").upsert(rows, on_conflict="enrich_date,ticker").execute()
 
@@ -146,7 +138,7 @@ def get_ticker_history(ticker: str, limit: int = 10) -> list[dict]:
     sb = get_client()
     res = (
         sb.table("enriched")
-        .select("enrich_date,ticker,score,vol_ratio,insider_buys_90d,insider_buy_value,insider_sells_90d,short_interest_pct,pe_ratio,score_volume,score_insider,score_short_interest,score_fundamental,score_penalty,volume_signal,insider_signal,short_signal,thesis")
+        .select("enrich_date,ticker,score,vol_ratio,insider_buys_90d,insider_buy_value,insider_sells_90d,short_interest_pct,pe_ratio,score_volume,score_insider,score_short_interest,score_fundamental,score_penalty,volume_signal,insider_signal,short_signal,thesis,score_insider_quality,top_insider_role,ownership_form,ownership_holder,ownership_pct,ownership_signal,score_ownership,short_sale_volume,total_volume_reported,short_sale_ratio,short_flow_signal,score_short_flow")
         .eq("ticker", ticker.upper())
         .order("enrich_date", desc=True)
         .limit(limit)
@@ -157,25 +149,15 @@ def get_ticker_history(ticker: str, limit: int = 10) -> list[dict]:
     return rows
 
 
-# ── WATCHLIST ────────────────────────────────────────────────────────────────
-
 def get_watchlist() -> list[dict]:
     sb = get_client()
-    res = (
-        sb.table("watchlist")
-        .select("ticker,added_at,notes")
-        .order("added_at", desc=True)
-        .execute()
-    )
+    res = sb.table("watchlist").select("ticker,added_at,notes").order("added_at", desc=True).execute()
     return res.data
 
 
 def add_to_watchlist(ticker: str, notes: str = ""):
     sb = get_client()
-    sb.table("watchlist").upsert(
-        {"ticker": ticker.upper(), "notes": notes},
-        on_conflict="ticker"
-    ).execute()
+    sb.table("watchlist").upsert({"ticker": ticker.upper(), "notes": notes}, on_conflict="ticker").execute()
 
 
 def remove_from_watchlist(ticker: str):
@@ -187,7 +169,6 @@ def get_watchlist_enriched() -> list[dict]:
     watchlist = get_watchlist()
     if not watchlist:
         return []
-
     tickers = [w["ticker"] for w in watchlist]
     sb = get_client()
     res = (
@@ -197,7 +178,6 @@ def get_watchlist_enriched() -> list[dict]:
         .order("enrich_date", desc=True)
         .execute()
     )
-
     seen = set()
     result = []
     for row in (res.data or []):
