@@ -2,10 +2,10 @@ name: Smart Money Screener
 
 on:
   schedule:
-    - cron: '0 20 * * 0'
-    - cron: '0 13 * * 1-5'
-    - cron: '45 13 * * 1-5'
-    - cron: '30 21 * * 1-5'
+    - cron: '0 20 * * 0'    # Universe — duminică 20:00 UTC
+    - cron: '0 13 * * 1-5'  # Scan — 08:00 ET
+    - cron: '45 13 * * 1-5' # Enrich dimineața — 08:45 ET
+    - cron: '30 21 * * 1-5' # Enrich seară — 16:30 ET
 
   workflow_dispatch:
     inputs:
@@ -14,10 +14,7 @@ on:
         required: true
         default: 'scan'
         type: choice
-        options:
-          - universe
-          - scan
-          - enrich
+        options: [universe, scan, enrich]
 
 jobs:
   run-screener:
@@ -27,11 +24,8 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -39,29 +33,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Detecteaza faza
-        id: detect-phase
+      - name: Detectează faza
+        id: phase
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "phase=${{ github.event.inputs.phase }}" >> $GITHUB_OUTPUT
+            echo "name=${{ github.event.inputs.phase }}" >> $GITHUB_OUTPUT
           else
-            HOUR=$(date -u +%H)
-            MIN=$(date -u +%M)
-            DOW=$(date -u +%u)
-
-            if [ "$DOW" = "7" ] && [ "$HOUR" = "20" ]; then
-              echo "phase=universe" >> $GITHUB_OUTPUT
-            elif [ "$HOUR" = "13" ] && [ "$MIN" -lt "30" ]; then
-              echo "phase=scan" >> $GITHUB_OUTPUT
-            else
-              echo "phase=enrich" >> $GITHUB_OUTPUT
+            H=$(date -u +%H)
+            M=$(date -u +%M)
+            D=$(date -u +%u)
+            if   [ "$D" = "7" ] && [ "$H" = "20" ]; then echo "name=universe" >> $GITHUB_OUTPUT
+            elif [ "$H" = "13" ] && [ "$M" -lt "30" ]; then echo "name=scan" >> $GITHUB_OUTPUT
+            else echo "name=enrich" >> $GITHUB_OUTPUT
             fi
           fi
 
-      - name: Ruleaza faza
-        run: python collectors/run.py --phase ${{ steps.detect-phase.outputs.phase }}
+      - name: Rulează faza
+        run: python collectors/run.py --phase ${{ steps.phase.outputs.name }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
-          FMP_KEY: ${{ secrets.FMP_KEY }}
+          FINNHUB_KEY:  ${{ secrets.FINNHUB_KEY }}
+          FMP_KEY:      ${{ secrets.FMP_KEY }}
