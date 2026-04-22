@@ -1,6 +1,7 @@
-yfinance==0.2.38
-finnhub-python==2.4.20
-supabase==2.4.6
-requests==2.31.0
-pandas==2.2.1
-streamlit==1.32.0
+yfinance>=0.2.38
+finnhub-python>=2.4.20
+supabase>=2.4.6
+requests>=2.31.0
+pandas>=2.2.1
+streamlit>=1.32.0
+lxml>=5.0.0
