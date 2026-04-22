@@ -1,7 +1,6 @@
 """
-Premium Streamlit UI — read-only, citește exclusiv din Supabase.
-Nu face niciun API call extern.
-Nu schimbă structura proiectului.
+Premium Streamlit UI — stabil pentru Streamlit Cloud.
+Păstrează structura proiectului și Supabase backend.
 """
 import sys
 sys.path.insert(0, ".")
@@ -9,7 +8,7 @@ sys.path.insert(0, ".")
 from datetime import date
 import pandas as pd
 import streamlit as st
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 from app.db import (
     get_enriched,
@@ -40,11 +39,6 @@ st.markdown("""
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 16px;
     padding: 14px 16px;
-}
-.kpi-label {
-    color: #9aa4b2;
-    font-size: 0.84rem;
-    margin-bottom: 2px;
 }
 .hero {
     padding: 18px 20px;
@@ -79,7 +73,10 @@ st.markdown("""
 def fmt_money(v):
     if v is None or v == 0:
         return "—"
-    v = float(v)
+    try:
+        v = float(v)
+    except Exception:
+        return "—"
     if abs(v) >= 1_000_000_000:
         return f"${v/1_000_000_000:.2f}B"
     if abs(v) >= 1_000_000:
@@ -91,7 +88,10 @@ def fmt_money(v):
 def fmt_int(v):
     if v is None or v == 0:
         return "—"
-    return f"{int(v):,}"
+    try:
+        return f"{int(v):,}"
+    except Exception:
+        return "—"
 
 def fmt_pct(v):
     if v is None:
@@ -104,43 +104,16 @@ def fmt_pct(v):
         return f"{v*100:.1f}%"
     return f"{v:.1f}%"
 
-def score_label(score):
+def score_bucket(score):
     try:
         score = int(score)
     except Exception:
         score = 0
     if score >= 70:
-        return "Strong"
+        return "🟢 Strong"
     if score >= 45:
-        return "Neutral"
-    return "Weak"
-
-def score_color(score):
-    try:
-        score = int(score)
-    except Exception:
-        score = 0
-    if score >= 70:
-        return "#16a34a"
-    if score >= 45:
-        return "#eab308"
-    return "#dc2626"
-
-def make_score_html(score):
-    color = score_color(score)
-    label = score_label(score)
-    return (
-        f"<div style='display:flex;align-items:center;gap:8px;'>"
-        f"<span style='display:inline-block;padding:4px 10px;border-radius:999px;"
-        f"background:{color};color:white;font-weight:700;font-size:12px;'>{int(score)}/100</span>"
-        f"<span style='color:#94a3b8;font-size:12px;'>{label}</span>"
-        f"</div>"
-    )
-
-def safe_df(rows: list[dict]) -> pd.DataFrame:
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows)
+        return "🟡 Neutral"
+    return "🔴 Weak"
 
 def build_scanner_df(rows: list[dict]) -> pd.DataFrame:
     if not rows:
@@ -158,24 +131,24 @@ def build_scanner_df(rows: list[dict]) -> pd.DataFrame:
         if c not in df.columns:
             df[c] = None
 
-    df["score_badge"] = df["score"].fillna(0).apply(make_score_html)
-    df["price_fmt"] = df["price"].apply(lambda x: f"${float(x):.2f}" if pd.notna(x) else "—")
-    df["vol_ratio_fmt"] = df["vol_ratio"].apply(lambda x: f"{float(x):.2f}x" if pd.notna(x) else "—")
-    df["volume_fmt"] = df["volume"].apply(fmt_int)
-    df["avg_volume_20d_fmt"] = df["avg_volume_20d"].apply(fmt_int)
-    df["insider_buy_value_fmt"] = df["insider_buy_value"].apply(fmt_money)
-    df["short_interest_pct_fmt"] = df["short_interest_pct"].apply(fmt_pct)
-    df["market_cap_fmt"] = df["market_cap"].apply(fmt_money)
-    df["pe_ratio_fmt"] = df["pe_ratio"].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "—")
-    df["insider_buys_90d"] = df["insider_buys_90d"].fillna(0).astype(int)
-    df["insider_sells_90d"] = df["insider_sells_90d"].fillna(0).astype(int)
     df["score"] = df["score"].fillna(0).astype(int)
+    df["signal"] = df["score"].apply(score_bucket)
+    df["price"] = df["price"].apply(lambda x: f"${float(x):.2f}" if pd.notna(x) else "—")
+    df["vol_ratio"] = df["vol_ratio"].apply(lambda x: f"{float(x):.2f}x" if pd.notna(x) else "—")
+    df["volume"] = df["volume"].apply(fmt_int)
+    df["avg_volume_20d"] = df["avg_volume_20d"].apply(fmt_int)
+    df["insider_buys_90d"] = df["insider_buys_90d"].fillna(0).astype(int)
+    df["insider_buy_value"] = df["insider_buy_value"].apply(fmt_money)
+    df["insider_sells_90d"] = df["insider_sells_90d"].fillna(0).astype(int)
+    df["short_interest_pct"] = df["short_interest_pct"].apply(fmt_pct)
+    df["pe_ratio"] = df["pe_ratio"].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "—")
+    df["market_cap"] = df["market_cap"].apply(fmt_money)
 
     return df[[
-        "ticker", "score", "score_badge", "price_fmt", "vol_ratio_fmt", "volume_fmt",
-        "avg_volume_20d_fmt", "insider_buys_90d", "insider_buy_value_fmt",
-        "insider_sells_90d", "short_interest_pct_fmt", "pe_ratio_fmt",
-        "market_cap_fmt", "sector", "industry", "enrich_date"
+        "ticker", "score", "signal", "price", "vol_ratio", "volume",
+        "avg_volume_20d", "insider_buys_90d", "insider_buy_value",
+        "insider_sells_90d", "short_interest_pct", "pe_ratio",
+        "market_cap", "sector", "industry", "enrich_date"
     ]]
 
 def build_watchlist_df(rows: list[dict]) -> pd.DataFrame:
@@ -194,19 +167,19 @@ def build_watchlist_df(rows: list[dict]) -> pd.DataFrame:
             df[c] = None
 
     df["score"] = df["score"].fillna(0).astype(int)
-    df["score_badge"] = df["score"].apply(make_score_html)
-    df["price_fmt"] = df["price"].apply(lambda x: f"${float(x):.2f}" if pd.notna(x) else "—")
-    df["vol_ratio_fmt"] = df["vol_ratio"].apply(lambda x: f"{float(x):.2f}x" if pd.notna(x) else "—")
-    df["insider_buy_value_fmt"] = df["insider_buy_value"].apply(fmt_money)
-    df["short_interest_pct_fmt"] = df["short_interest_pct"].apply(fmt_pct)
-    df["pe_ratio_fmt"] = df["pe_ratio"].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "—")
+    df["signal"] = df["score"].apply(score_bucket)
+    df["price"] = df["price"].apply(lambda x: f"${float(x):.2f}" if pd.notna(x) else "—")
+    df["vol_ratio"] = df["vol_ratio"].apply(lambda x: f"{float(x):.2f}x" if pd.notna(x) else "—")
     df["insider_buys_90d"] = df["insider_buys_90d"].fillna(0).astype(int)
+    df["insider_buy_value"] = df["insider_buy_value"].apply(fmt_money)
     df["insider_sells_90d"] = df["insider_sells_90d"].fillna(0).astype(int)
+    df["short_interest_pct"] = df["short_interest_pct"].apply(fmt_pct)
+    df["pe_ratio"] = df["pe_ratio"].apply(lambda x: f"{float(x):.1f}" if pd.notna(x) else "—")
 
     return df[[
-        "ticker", "score", "score_badge", "price_fmt", "vol_ratio_fmt",
-        "insider_buys_90d", "insider_buy_value_fmt", "insider_sells_90d",
-        "short_interest_pct_fmt", "pe_ratio_fmt", "sector", "industry", "enrich_date"
+        "ticker", "score", "signal", "price", "vol_ratio",
+        "insider_buys_90d", "insider_buy_value", "insider_sells_90d",
+        "short_interest_pct", "pe_ratio", "sector", "industry", "enrich_date"
     ]]
 
 def render_kpis(df: pd.DataFrame):
@@ -221,7 +194,7 @@ def render_kpis(df: pd.DataFrame):
     c3.metric("Top score", top_score)
     c4.metric("Top ticker", top_ticker)
 
-def aggrid_table(df: pd.DataFrame, kind: str):
+def aggrid_table(df: pd.DataFrame, key: str):
     if df.empty:
         return {"selected_rows": []}
 
@@ -231,72 +204,49 @@ def aggrid_table(df: pd.DataFrame, kind: str):
         sortable=True,
         filter=True,
         resizable=True,
-        min_column_width=90,
+        min_column_width=95,
     )
 
     gb.configure_selection(
         selection_mode="single",
         use_checkbox=True,
-        pre_selected_rows=[],
     )
 
     gb.configure_grid_options(
-        rowHeight=42,
-        headerHeight=42,
+        rowHeight=38,
+        headerHeight=40,
         animateRows=True,
-        suppressRowClickSelection=False,
+        domLayout="normal",
     )
 
     gb.configure_column("ticker", pinned="left", width=110)
-    gb.configure_column("score", hide=True)
-    gb.configure_column(
-        "score_badge",
-        header_name="Score",
-        width=150,
-        filter=False,
-        sortable=True,
-        cellRenderer=JsCode("function(params) { return params.value; }"),
-    )
-
-    if kind == "scanner":
-        gb.configure_column("price_fmt", header_name="Price", width=100)
-        gb.configure_column("vol_ratio_fmt", header_name="Vol Ratio", width=110)
-        gb.configure_column("volume_fmt", header_name="Volume", width=115)
-        gb.configure_column("avg_volume_20d_fmt", header_name="Avg Vol 20d", width=125)
-        gb.configure_column("insider_buys_90d", header_name="Buys 90d", width=105)
-        gb.configure_column("insider_buy_value_fmt", header_name="Buy Value", width=120)
-        gb.configure_column("insider_sells_90d", header_name="Sells 90d", width=105)
-        gb.configure_column("short_interest_pct_fmt", header_name="Short %", width=100)
-        gb.configure_column("pe_ratio_fmt", header_name="P/E", width=90)
-        gb.configure_column("market_cap_fmt", header_name="Mkt Cap", width=110)
-        gb.configure_column("sector", width=130)
-        gb.configure_column("industry", width=160)
-        gb.configure_column("enrich_date", header_name="Updated", width=110)
-    else:
-        gb.configure_column("price_fmt", header_name="Price", width=100)
-        gb.configure_column("vol_ratio_fmt", header_name="Vol Ratio", width=110)
-        gb.configure_column("insider_buys_90d", header_name="Buys 90d", width=105)
-        gb.configure_column("insider_buy_value_fmt", header_name="Buy Value", width=120)
-        gb.configure_column("insider_sells_90d", header_name="Sells 90d", width=105)
-        gb.configure_column("short_interest_pct_fmt", header_name="Short %", width=100)
-        gb.configure_column("pe_ratio_fmt", header_name="P/E", width=90)
-        gb.configure_column("sector", width=130)
-        gb.configure_column("industry", width=160)
-        gb.configure_column("enrich_date", header_name="Updated", width=110)
+    gb.configure_column("score", width=95, type=["numericColumn"])
+    gb.configure_column("signal", width=130)
+    gb.configure_column("price", width=90)
+    gb.configure_column("vol_ratio", width=100)
+    gb.configure_column("volume", width=115)
+    gb.configure_column("avg_volume_20d", header_name="Avg Vol 20d", width=125)
+    gb.configure_column("insider_buys_90d", header_name="Buys 90d", width=100)
+    gb.configure_column("insider_buy_value", header_name="Buy Value", width=115)
+    gb.configure_column("insider_sells_90d", header_name="Sells 90d", width=100)
+    gb.configure_column("short_interest_pct", header_name="Short %", width=95)
+    gb.configure_column("pe_ratio", header_name="P/E", width=85)
+    gb.configure_column("market_cap", header_name="Mkt Cap", width=110)
+    gb.configure_column("sector", width=130)
+    gb.configure_column("industry", width=160)
+    gb.configure_column("enrich_date", header_name="Updated", width=110)
 
     grid = AgGrid(
         df,
         gridOptions=gb.build(),
-        height=520 if len(df) > 10 else 120 + len(df) * 42,
+        height=420,
         fit_columns_on_grid_load=False,
-        allow_unsafe_jscode=True,
         update_mode=GridUpdateMode.SELECTION_CHANGED,
-        theme="streamlit",
-        reload_data=False,
+        theme="balham",
+        key=key,
+        reload_data=True,
     )
     return grid
-
-# ── DATA LOAD ────────────────────────────────────────────────────────────────
 
 def load_scanner_data(days_back: int, min_score: int):
     try:
@@ -332,7 +282,7 @@ with st.sidebar:
 
 # ── HEADER ───────────────────────────────────────────────────────────────────
 
-st.markdown(f"""
+st.markdown("""
 <div class="hero">
     <div class="hero-title">Smart Money Screener</div>
     <div class="hero-sub">
@@ -343,7 +293,7 @@ st.markdown(f"""
 
 tab_scanner, tab_watchlist = st.tabs(["Scanner", "Watchlist"])
 
-# ── TAB: SCANNER ─────────────────────────────────────────────────────────────
+# ── TAB SCANNER ──────────────────────────────────────────────────────────────
 
 with tab_scanner:
     raw = load_scanner_data(days_back=days_back, min_score=min_score)
@@ -359,13 +309,13 @@ with tab_scanner:
     else:
         render_kpis(df)
 
-        top5 = df.sort_values("score", ascending=False).head(5)[["ticker", "score", "vol_ratio_fmt", "insider_buys_90d"]]
+        top5 = df.sort_values("score", ascending=False).head(5)[["ticker", "score", "vol_ratio", "insider_buys_90d"]]
         st.markdown('<div class="small-muted">Top 5 după scor</div>', unsafe_allow_html=True)
         st.dataframe(
             top5.rename(columns={
                 "ticker": "Ticker",
                 "score": "Score",
-                "vol_ratio_fmt": "Vol Ratio",
+                "vol_ratio": "Vol Ratio",
                 "insider_buys_90d": "Buys 90d",
             }),
             use_container_width=True,
@@ -373,13 +323,13 @@ with tab_scanner:
         )
 
         st.markdown('<div class="section-title">Candidates</div>', unsafe_allow_html=True)
-        grid = aggrid_table(df, "scanner")
+        grid = aggrid_table(df, "scanner_grid")
         selected = grid.get("selected_rows", [])
 
         c1, c2, c3 = st.columns([1.2, 1.2, 6])
         with c1:
             if st.button("Add selected", use_container_width=True, type="primary"):
-                if selected:
+                if len(selected) > 0:
                     ticker = selected[0]["ticker"]
                     add_to_watchlist(ticker)
                     st.success(f"{ticker} adăugat în watchlist.")
@@ -390,15 +340,15 @@ with tab_scanner:
             if st.button("Refresh page", use_container_width=True):
                 st.rerun()
         with c3:
-            if selected:
+            if len(selected) > 0:
                 row = selected[0]
                 st.markdown(
                     f"<div class='small-muted'>Selectat: <b>{row['ticker']}</b> • Score {row['score']} • "
-                    f"Vol {row['vol_ratio_fmt']} • Buy Value {row['insider_buy_value_fmt']}</div>",
+                    f"Vol {row['vol_ratio']} • Buy Value {row['insider_buy_value']}</div>",
                     unsafe_allow_html=True,
                 )
 
-# ── TAB: WATCHLIST ───────────────────────────────────────────────────────────
+# ── TAB WATCHLIST ────────────────────────────────────────────────────────────
 
 with tab_watchlist:
     st.markdown('<div class="section-title">Manage Watchlist</div>', unsafe_allow_html=True)
@@ -446,13 +396,13 @@ with tab_watchlist:
         if df_w.empty:
             st.info("Tickerele există în watchlist, dar nu au încă date în enriched.")
         else:
-            grid_w = aggrid_table(df_w, "watchlist")
+            grid_w = aggrid_table(df_w, "watchlist_grid")
             selected_w = grid_w.get("selected_rows", [])
 
             c1, c2, c3 = st.columns([1.2, 1.2, 6])
             with c1:
                 if st.button("Remove selected", use_container_width=True):
-                    if selected_w:
+                    if len(selected_w) > 0:
                         ticker = selected_w[0]["ticker"]
                         remove_from_watchlist(ticker)
                         st.success(f"{ticker} șters din watchlist.")
@@ -463,10 +413,10 @@ with tab_watchlist:
                 if st.button("Reload", use_container_width=True):
                     st.rerun()
             with c3:
-                if selected_w:
+                if len(selected_w) > 0:
                     row = selected_w[0]
                     st.markdown(
                         f"<div class='small-muted'>Selectat: <b>{row['ticker']}</b> • Score {row['score']} • "
-                        f"Vol {row['vol_ratio_fmt']} • Updated {row['enrich_date']}</div>",
+                        f"Vol {row['vol_ratio']} • Updated {row['enrich_date']}</div>",
                         unsafe_allow_html=True,
                     )
