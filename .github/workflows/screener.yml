@@ -2,24 +2,25 @@ name: Smart Money Screener
 
 on:
   schedule:
-    - cron: '0 20 * * 0'    # Universe — duminică 20:00 UTC
-    - cron: '0 13 * * 1-5'  # Scan — 08:00 ET
-    - cron: '45 13 * * 1-5' # Enrich dimineața — 08:45 ET
-    - cron: '30 21 * * 1-5' # Enrich seară — 16:30 ET
+    - cron: '0 20 * * 0'     # Universe  — duminică 20:00 UTC
+    - cron: '0 13 * * 1-5'   # Scan      — 08:00 ET (luni-vineri)
+    - cron: '45 13 * * 1-5'  # Enrich    — 08:45 ET
+    - cron: '30 21 * * 1-5'  # Enrich    — 16:30 ET
+    - cron: '45 21 * * 1-5'  # Watchlist — 16:45 ET
 
   workflow_dispatch:
     inputs:
       phase:
         description: 'Faza de rulat'
         required: true
-        default: 'scan'
+        default: 'watchlist'
         type: choice
-        options: [universe, scan, enrich]
+        options: [universe, scan, enrich, watchlist]
 
 jobs:
   run-screener:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -41,10 +42,20 @@ jobs:
           else
             H=$(date -u +%H)
             M=$(date -u +%M)
-            D=$(date -u +%u)
-            if   [ "$D" = "7" ] && [ "$H" = "20" ]; then echo "name=universe" >> $GITHUB_OUTPUT
-            elif [ "$H" = "13" ] && [ "$M" -lt "30" ]; then echo "name=scan" >> $GITHUB_OUTPUT
-            else echo "name=enrich" >> $GITHUB_OUTPUT
+            D=$(date -u +%u)  # 7=duminică
+
+            if   [ "$D" = "7" ] && [ "$H" = "20" ]; then
+              echo "name=universe"  >> $GITHUB_OUTPUT
+            elif [ "$H" = "13" ] && [ "$M" -lt "30" ]; then
+              echo "name=scan"      >> $GITHUB_OUTPUT
+            elif [ "$H" = "13" ] && [ "$M" -ge "45" ]; then
+              echo "name=enrich"    >> $GITHUB_OUTPUT
+            elif [ "$H" = "21" ] && [ "$M" -lt "45" ]; then
+              echo "name=enrich"    >> $GITHUB_OUTPUT
+            elif [ "$H" = "21" ] && [ "$M" -ge "45" ]; then
+              echo "name=watchlist" >> $GITHUB_OUTPUT
+            else
+              echo "name=enrich"    >> $GITHUB_OUTPUT
             fi
           fi
 
