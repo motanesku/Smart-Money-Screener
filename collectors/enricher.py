@@ -1,18 +1,14 @@
 """
-Enrich v8 — fixes:
-- company_name adăugat din profile FMP
-- ownership_form/holder/pct completate corect
-- short_sale_ratio din FINRA short volume (gratuit)
-- zero carry-over între tickers
+Enricher v9 — modificări față de v8.1:
+- Scor NOU: Volume 40 + Short Flow 25 + Short Interest 20 + Ownership 15
+- Insider buy/sell: info vizibil, NU influențează scorul
+- Insider sell: neutru, nu penalizat
+- Istoric 30 zile (limit ridicat în db.py)
 """
-import os
-import sys
-import time
+import os, sys, time
 from datetime import date, timedelta
-
 import requests
 import yfinance as yf
-
 from collectors.edgar import get_insider_transactions_detailed
 
 FMP_KEY  = os.environ.get("FMP_KEY", "")
@@ -26,112 +22,116 @@ def fmp_get(endpoint: str, params: dict | None = None) -> list | dict:
         r.raise_for_status()
         return r.json()
     except Exception as e:
-        print(f"  FMP {endpoint} error: {e}")
+        print(f"  FMP /{endpoint} error: {e}")
         return {}
 
 
 def get_profile(ticker: str) -> dict:
-    """FMP /stable/profile — sector, PE, market cap, company name."""
     data = fmp_get("profile", {"symbol": ticker})
-    if isinstance(data, list) and data:
-        p = data[0]
-    elif isinstance(data, dict) and data:
-        p = data
-    else:
-        return {}
-
+    if isinstance(data, list) and data:   p = data[0]
+    elif isinstance(data, dict) and data: p = data
+    else: return {}
     return {
-        "company_name":     p.get("companyName") or p.get("name") or "",
-        "sector":           p.get("sector") or "",
-        "industry":         p.get("industry") or "",
-        "pe_ratio":         p.get("pe") or p.get("peRatio"),
-        "market_cap":       int(p.get("mktCap") or p.get("marketCap") or 0),
+        "company_name":       p.get("companyName") or p.get("name") or "",
+        "sector":             p.get("sector") or "",
+        "industry":           p.get("industry") or "",
+        "pe_ratio":           p.get("pe") or p.get("peRatio"),
+        "market_cap":         int(p.get("mktCap") or p.get("marketCap") or 0),
         "inst_ownership_pct": p.get("institutionalOwnershipPercentage"),
-        "beta":             p.get("beta"),
+        "beta":               p.get("beta"),
     }
 
 
-def normalize_role(raw_role: str) -> tuple[str, int]:
-    role = (raw_role or "").strip().upper()
-    if not role:                                              return "Unknown", 0
-    if "CHIEF EXECUTIVE" in role or role == "CEO":           return "CEO", 20
-    if "CHIEF FINANCIAL" in role or role == "CFO":           return "CFO", 18
-    if "10%" in role or "10 PERCENT" in role:                return "10% Owner", 10
-    if "DIRECTOR" in role:                                   return "Director", 8
-    if "OFFICER" in role:                                    return "Officer", 6
-    return raw_role.title(), 4
+ROLE_SCORE = {
+    "ceo": ("CEO", 20), "chief executive": ("CEO", 20),
+    "cfo": ("CFO", 18), "chief financial": ("CFO", 18),
+    "coo": ("COO", 16), "chief operating": ("COO", 16),
+    "president": ("President", 15),
+    "10%": ("10% Owner", 10), "10 percent": ("10% Owner", 10),
+    "director": ("Director", 8),
+    "officer": ("Officer", 6),
+    "vp": ("VP", 5), "vice president": ("VP", 5),
+}
+
+def normalize_role(raw: str) -> tuple[str, int]:
+    r = (raw or "").lower().strip()
+    if not r: return "Unknown", 0
+    for key, (name, score) in ROLE_SCORE.items():
+        if key in r: return name, score
+    return raw.title()[:30], 3
 
 
 def get_insider_trades_fmp(ticker: str, days_back: int = 90) -> dict:
-    """FMP insider trades — filtrate strict pe ticker."""
-    since    = (date.today() - timedelta(days=days_back)).isoformat()
-    ticker_u = ticker.upper().strip()
-    default  = {"insider_buys_90d": 0, "insider_buy_value": 0.0,
-                "insider_sells_90d": 0, "top_insider_role": "Unknown",
-                "insider_quality_score": 0}
+    """
+    FMP /stable/insider-trading?symbol=X
+    Insider = INFO ONLY, nu influențează scorul.
+    Sell = neutru (poate fi semnal de exit pentru trader).
+    """
+    since   = (date.today() - timedelta(days=days_back)).isoformat()
+    default = {"insider_buys_90d": 0, "insider_buy_value": 0.0,
+               "insider_sells_90d": 0, "insider_sell_value": 0.0,
+               "top_insider_role": "Unknown", "insider_quality_score": 0}
 
-    data = fmp_get("insider-trading/latest", {"symbol": ticker_u, "limit": 100})
+    data = fmp_get("insider-trading", {"symbol": ticker.upper(), "limit": 100})
+    if not isinstance(data, list):
+        data = fmp_get("insider-trading/search", {"symbol": ticker.upper(), "limit": 100})
     if not isinstance(data, list) or not data:
         return default
 
     buys = sells = 0
-    buy_value = 0.0
-    best_role, best_role_score = "Unknown", 0
-    filtered = 0
+    buy_value = sell_value = 0.0
+    best_role, best_score = "Unknown", 0
 
     for trade in data:
-        sym = (trade.get("symbol") or trade.get("ticker") or
-               trade.get("companySymbol") or "").upper().strip()
-        if sym and sym != ticker_u:
-            continue
-
         td = trade.get("transactionDate") or trade.get("filingDate") or ""
         if td and td < since:
             continue
 
-        filtered += 1
-        tx = (trade.get("transactionType") or trade.get("acquistionOrDisposition") or
-              trade.get("acquisitionOrDisposition") or "").upper().strip()
-        shares = abs(float(trade.get("securitiesTransacted") or trade.get("shares") or 0) or 0)
-        price  = float(trade.get("price") or trade.get("transactionPrice") or 0 or 0)
+        disp = (trade.get("acquistionOrDisposition") or
+                trade.get("acquisitionOrDisposition") or "").upper().strip()
+        tx   = (trade.get("transactionType") or "").upper().strip()
+
+        shares = abs(float(trade.get("securitiesTransacted") or 0) or 0)
+        price  = float(trade.get("price") or 0)
         value  = shares * price
 
-        raw_role = (trade.get("reportingOwnerRelationship") or
-                    trade.get("reportingOwnerTitle") or
-                    trade.get("title") or trade.get("officerTitle") or "")
-        role_name, role_score = normalize_role(raw_role)
-        if role_score > best_role_score:
-            best_role_score = role_score
-            best_role = role_name
+        raw_role = (trade.get("typeOfOwner") or
+                    trade.get("reportingOwnerRelationship") or
+                    trade.get("officerTitle") or "")
+        rname, rscore = normalize_role(raw_role)
+        if rscore > best_score:
+            best_score = rscore
+            best_role  = rname
 
-        if tx in ("P", "A", "PURCHASE", "P-PURCHASE", "BUY"):
+        is_buy  = disp == "A" or tx in ("P-PURCHASE", "P", "BUY", "PURCHASE")
+        is_sell = disp == "D" or tx in ("S-SALE", "S", "SELL", "SALE")
+
+        if is_buy:
             buys += 1; buy_value += value
-        elif tx in ("S", "D", "SALE", "S-SALE", "SELL"):
-            sells += 1
+        elif is_sell:
+            sells += 1; sell_value += value
 
-    if filtered == 0:
-        return default
-
-    return {"insider_buys_90d": buys, "insider_buy_value": round(buy_value, 2),
-            "insider_sells_90d": sells, "top_insider_role": best_role,
-            "insider_quality_score": best_role_score}
+    return {
+        "insider_buys_90d":     buys,
+        "insider_buy_value":    round(buy_value, 2),
+        "insider_sells_90d":    sells,
+        "insider_sell_value":   round(sell_value, 2),
+        "top_insider_role":     best_role,
+        "insider_quality_score": best_score,
+    }
 
 
 def get_short_data(ticker: str) -> dict:
-    """yfinance pentru short interest + FINRA short volume ratio."""
     result = {"short_interest_pct": None, "short_sale_ratio": None,
               "short_sale_volume": 0, "total_volume_reported": 0,
               "short_flow_signal": ""}
     try:
         info = yf.Ticker(ticker).info
-        si   = info.get("shortPercentOfFloat") or 0
-        if si and si < 1:
-            si = si * 100
-        result["short_interest_pct"] = round(float(si), 2) if si else None
+        si   = float(info.get("shortPercentOfFloat") or 0)
+        if si and si < 1: si = si * 100
+        result["short_interest_pct"] = round(si, 2) if si else None
     except Exception:
         pass
-
-    # FINRA short volume — gratuit, CSV zilnic
     try:
         today_str = date.today().strftime("%Y%m%d")
         url = f"https://cdn.finra.org/equity/regsho/daily/CNMSshvol{today_str}.txt"
@@ -140,223 +140,270 @@ def get_short_data(ticker: str) -> dict:
             for line in r.text.splitlines():
                 parts = line.split("|")
                 if len(parts) >= 4 and parts[0].upper() == ticker.upper():
-                    short_vol = int(parts[1]) if parts[1].isdigit() else 0
-                    total_vol = int(parts[3]) if parts[3].isdigit() else 0
-                    if total_vol > 0:
-                        ratio = round(short_vol / total_vol, 4)
-                        result["short_sale_volume"]      = short_vol
-                        result["total_volume_reported"]  = total_vol
-                        result["short_sale_ratio"]       = ratio
-                        if ratio >= 0.60:
-                            result["short_flow_signal"] = f"High short flow ({ratio*100:.0f}%)"
-                        elif ratio >= 0.45:
-                            result["short_flow_signal"] = f"Elevated short flow ({ratio*100:.0f}%)"
-                        else:
-                            result["short_flow_signal"] = f"Normal short flow ({ratio*100:.0f}%)"
+                    sv = int(parts[1]) if parts[1].isdigit() else 0
+                    tv = int(parts[3]) if parts[3].isdigit() else 0
+                    if tv > 0:
+                        ratio = round(sv / tv, 4)
+                        result["short_sale_volume"]     = sv
+                        result["total_volume_reported"] = tv
+                        result["short_sale_ratio"]      = ratio
+                        if ratio >= 0.60:   result["short_flow_signal"] = f"High short flow ({ratio*100:.0f}%)"
+                        elif ratio >= 0.45: result["short_flow_signal"] = f"Elevated short flow ({ratio*100:.0f}%)"
+                        else:               result["short_flow_signal"] = f"Normal short flow ({ratio*100:.0f}%)"
                     break
     except Exception:
         pass
-
     return result
 
 
 def get_ownership_data(ticker: str) -> dict:
-    """
-    FMP /stable/acquisition-of-beneficial-ownership — 13D/13G filings.
-    Confirmat gratuit.
-    """
     result = {"ownership_form": "", "ownership_holder": "",
               "ownership_pct": None, "ownership_signal": "", "score_ownership": 0}
     data = fmp_get("acquisition-of-beneficial-ownership", {"symbol": ticker})
     if not isinstance(data, list) or not data:
         return result
-
-    # Cel mai recent filing
     latest = data[0]
     form   = latest.get("form") or latest.get("formType") or ""
     holder = latest.get("reportingName") or latest.get("filerName") or ""
     pct    = latest.get("ownershipPercentage") or latest.get("percentOwned")
-
-    result["ownership_form"]   = form
-    result["ownership_holder"] = holder
-    result["ownership_pct"]    = float(pct) if pct else None
-
+    result.update({"ownership_form": form, "ownership_holder": holder,
+                   "ownership_pct": float(pct) if pct else None})
     if "13D" in form.upper():
-        result["ownership_signal"]  = "Active 13D filing (activist)"
-        result["score_ownership"]   = 15
+        result["ownership_signal"] = "Active 13D filing (activist)"
+        result["score_ownership"]  = 15
     elif "13G" in form.upper():
-        result["ownership_signal"]  = "Passive 13G filing"
-        result["score_ownership"]   = 8
+        result["ownership_signal"] = "Passive 13G filing"
+        result["score_ownership"]  = 8
     elif form:
-        result["ownership_signal"]  = f"Recent {form} filing"
-        result["score_ownership"]   = 4
-
+        result["ownership_signal"] = f"Recent {form} filing"
+        result["score_ownership"]  = 4
     return result
 
 
+def get_price_volume(ticker: str) -> dict:
+    """
+    Prețuri și volume pentru tickerii din watchlist care nu au date din scan.
+    """
+    try:
+        hist = yf.download(ticker, period="25d", interval="1d",
+                           auto_adjust=True, progress=False)
+        if hist is None or len(hist) < 5:
+            return {}
+        hist = hist.dropna(subset=["Close", "Volume"])
+        price      = float(hist["Close"].iloc[-1])
+        vol_today  = float(hist["Volume"].iloc[-1])
+        avg_vol    = float(hist["Volume"].iloc[:-1].tail(20).mean())
+        vol_ratio  = round(vol_today / avg_vol, 2) if avg_vol > 0 else 0
+        return {
+            "price":         round(price, 2),
+            "volume":        int(vol_today),
+            "avg_volume_20d": int(avg_vol),
+            "vol_ratio":     vol_ratio,
+        }
+    except Exception:
+        return {}
+
+
 def build_signals_and_scores(data: dict) -> dict:
-    score_volume = score_insider = score_si = score_fund = score_penalty = score_sf = 0
-
-    # Volume
+    """
+    SCOR NOU v9:
+    - Volume:        max 40 pts  (principalul indicator)
+    - Short Flow:    max 25 pts  (presiune reală pe acțiune)
+    - Short Interest: max 20 pts (context short squeeze / distribuție)
+    - Ownership 13D/13G: max 15 pts (intrare instituțională semnificativă)
+    - Insider: INFO ONLY, nu în scor
+    Total: 100 pts
+    """
+    # ── Volume (40 pts) ───────────────────────────────────────────────────────
     vol = float(data.get("vol_ratio") or 0)
-    if vol >= 5:   score_volume = 25; volume_signal = "Extreme volume spike (>5x)"
-    elif vol >= 3: score_volume = 15; volume_signal = "Strong unusual volume (>3x)"
-    elif vol >= 2: score_volume = 8;  volume_signal = "Moderate unusual volume (>2x)"
-    else:          volume_signal = "Normal volume"
+    if vol >= 10:  sv = 40; vsig = "Extreme volume spike (>10x)"
+    elif vol >= 5: sv = 32; vsig = "Very high volume spike (>5x)"
+    elif vol >= 3: sv = 22; vsig = "Strong unusual volume (>3x)"
+    elif vol >= 2: sv = 12; vsig = "Moderate unusual volume (>2x)"
+    elif vol >= 1.5: sv = 5; vsig = "Slight volume increase (>1.5x)"
+    else:           sv = 0;  vsig = "Normal volume"
 
-    # Insider
-    buys      = int(data.get("insider_buys_90d") or 0)
-    buy_value = float(data.get("insider_buy_value") or 0)
-    sells     = int(data.get("insider_sells_90d") or 0)
-    quality   = int(data.get("insider_quality_score") or 0)
+    # ── Short Flow (25 pts) ───────────────────────────────────────────────────
+    sr = data.get("short_sale_ratio")
+    sr = float(sr) if sr is not None else None
+    if sr is None:     sf = 0;  sfsig = "Short flow data unavailable"
+    elif sr >= 0.70:   sf = 25; sfsig = f"Very high short flow ({sr*100:.0f}%) — strong pressure"
+    elif sr >= 0.60:   sf = 18; sfsig = f"High short flow ({sr*100:.0f}%) — elevated pressure"
+    elif sr >= 0.50:   sf = 10; sfsig = f"Elevated short flow ({sr*100:.0f}%)"
+    elif sr >= 0.40:   sf = 5;  sfsig = f"Moderate short flow ({sr*100:.0f}%)"
+    else:              sf = 0;  sfsig = f"Normal short flow ({sr*100:.0f}%)" if sr else "Short flow data unavailable"
 
-    if buy_value >= 1_000_000:  score_insider = 35; insider_signal = "Heavy insider buying (>$1M)"
-    elif buy_value >= 250_000:  score_insider = 20; insider_signal = "Some insider buying detected"
-    elif buys >= 3:             score_insider = 18; insider_signal = "Cluster insider buying"
-    elif buys >= 1:             score_insider = 10; insider_signal = "Light insider buying"
-    else:                       insider_signal = "No meaningful insider buying"
-    score_insider += quality
-
-    if sells >= 20:   score_penalty -= 15
-    elif sells >= 10: score_penalty -= 12
-    elif sells >= 5:  score_penalty -= 6
-
-    # Short interest
+    # ── Short Interest (20 pts) ───────────────────────────────────────────────
     si = data.get("short_interest_pct")
     si = float(si) if si is not None else None
-    if si is None:       short_signal = "Short interest unavailable"
-    elif 0 < si < 5:     score_si = 10; short_signal = "Low short interest (<5%)"
-    elif si <= 15:       score_si = 5;  short_signal = "Moderate short interest (5-15%)"
-    elif si > 30:        score_si = -10; short_signal = "Very high short interest (>30%)"
-    else:                short_signal = "Elevated short interest"
+    if si is None:     ss = 0;  shsig = "Short interest unavailable"
+    elif si > 30:      ss = 20; shsig = f"Very high short interest ({si:.1f}%) — squeeze potential"
+    elif si > 20:      ss = 15; shsig = f"High short interest ({si:.1f}%)"
+    elif si > 10:      ss = 8;  shsig = f"Elevated short interest ({si:.1f}%)"
+    elif si > 5:       ss = 3;  shsig = f"Moderate short interest ({si:.1f}%)"
+    else:              ss = 0;  shsig = f"Low short interest ({si:.1f}%)"
 
-    # Short flow
-    sr = data.get("short_sale_ratio")
-    if sr:
-        sr = float(sr)
-        if sr >= 0.60: score_sf = 8
-        elif sr >= 0.45: score_sf = 4
+    # ── Ownership 13D/13G (15 pts) ────────────────────────────────────────────
+    so = int(data.get("score_ownership") or 0)  # deja calculat în get_ownership_data
 
-    # Fundamentals
-    pe   = data.get("pe_ratio")
-    inst = data.get("inst_ownership_pct")
-    try: pe   = float(pe)   if pe   is not None else None
-    except: pe = None
-    try: inst = float(inst) if inst is not None else None
-    except: inst = None
+    # ── Total ─────────────────────────────────────────────────────────────────
+    total = max(0, min(100, sv + sf + ss + so))
 
-    if pe is not None:
-        if 5 <= pe <= 25:   score_fund += 10
-        elif 25 < pe <= 40: score_fund += 5
-    if inst is not None:
-        if inst >= 60:   score_fund += 10
-        elif inst >= 40: score_fund += 5
-
-    # Ownership bonus
-    score_own = int(data.get("score_ownership") or 0)
-
-    total = max(0, min(100, score_volume + score_insider + score_si +
-                           score_sf + score_fund + score_own + score_penalty))
-
+    # ── Thesis text ───────────────────────────────────────────────────────────
     parts = []
-    if score_volume > 0:  parts.append("Volume unusual")
-    if score_insider > 0: parts.append("insider buying meaningful")
-    if score_si > 0:      parts.append("short interest manageable")
-    elif score_si < 0:    parts.append("short interest elevated")
-    if score_penalty < 0: parts.append("insider selling tempers conviction")
-    if score_own > 0:     parts.append("institutional ownership signal")
-    if not parts:         parts.append("signals mixed")
+    if sv > 0:     parts.append(vsig.lower())
+    if sf > 0:     parts.append(sfsig.lower())
+    if ss > 0:     parts.append(shsig.lower())
+    if so > 0:     parts.append(data.get("ownership_signal", "").lower())
+    # Insider ca context, nu ca scor
+    buys  = int(data.get("insider_buys_90d") or 0)
+    sells = int(data.get("insider_sells_90d") or 0)
+    if buys > 0:   parts.append(f"{buys} insider buy(s) in 90d — context info")
+    if sells > 0:  parts.append(f"{sells} insider sell(s) in 90d — monitor for exit signal")
+    if not parts:  parts.append("no significant signals detected")
 
     return {
-        "score":                 total,
-        "score_volume":          score_volume,
-        "score_insider":         score_insider,
-        "score_short_interest":  score_si,
-        "score_short_flow":      score_sf,
-        "score_fundamental":     score_fund,
-        "score_penalty":         score_penalty,
-        "volume_signal":         volume_signal,
-        "insider_signal":        insider_signal,
-        "short_signal":          short_signal,
-        "thesis":                ", ".join(parts).capitalize() + ".",
+        "score":                total,
+        "score_volume":         sv,
+        "score_insider":        0,       # insider nu mai contribuie la scor
+        "score_insider_quality": 0,
+        "score_ownership":      so,
+        "score_short_interest": ss,
+        "score_short_flow":     sf,
+        "score_fundamental":    0,
+        "score_penalty":        0,
+        "volume_signal":        vsig,
+        "insider_signal":       f"{buys} buys / {sells} sells (90d, info only)",
+        "short_signal":         shsig,
+        "short_flow_signal_text": sfsig,
+        "thesis":               ". ".join(p.capitalize() for p in parts) + ".",
     }
 
 
+def enrich_single(ticker: str, scan_data: dict | None = None) -> dict | None:
+    """
+    Enrich complet pentru un singur ticker.
+    scan_data: date din scan (price, volume, vol_ratio) — opțional.
+    Dacă lipsesc, le trage direct din yfinance.
+    """
+    ticker = ticker.upper().strip()
+    if not ticker:
+        return None
+
+    data = {
+        "ticker":               ticker,
+        "price":                None,
+        "volume":               0,
+        "avg_volume_20d":       0,
+        "vol_ratio":            0,
+        "company_name":         "",
+        "sector":               "",
+        "industry":             "",
+        "pe_ratio":             None,
+        "market_cap":           0,
+        "inst_ownership_pct":   None,
+        "beta":                 None,
+        "insider_buys_90d":     0,
+        "insider_buy_value":    0.0,
+        "insider_sells_90d":    0,
+        "insider_sell_value":   0.0,
+        "top_insider_role":     "Unknown",
+        "insider_quality_score": 0,
+        "short_interest_pct":   None,
+        "short_sale_ratio":     None,
+        "short_sale_volume":    0,
+        "total_volume_reported": 0,
+        "short_flow_signal":    "",
+        "ownership_form":       "",
+        "ownership_holder":     "",
+        "ownership_pct":        None,
+        "ownership_signal":     "",
+        "score_ownership":      0,
+    }
+
+    # Date din scan dacă există, altfel yfinance
+    if scan_data:
+        data.update({k: scan_data.get(k) for k in
+                     ["price","volume","avg_volume_20d","vol_ratio"] if scan_data.get(k)})
+    else:
+        pv = get_price_volume(ticker)
+        data.update(pv)
+
+    # FMP profile
+    data.update(get_profile(ticker))
+    time.sleep(0.3)
+
+    # FMP insider (info only)
+    insider = get_insider_trades_fmp(ticker)
+    if insider.get("insider_buys_90d", 0) == 0 and insider.get("insider_sells_90d", 0) == 0:
+        try:
+            edgar = get_insider_transactions_detailed(ticker)
+            if edgar.get("insider_buys_90d", 0) > 0:
+                insider.update(edgar)
+        except Exception:
+            pass
+    data.update(insider)
+    time.sleep(0.3)
+
+    # FMP ownership 13D/13G
+    data.update(get_ownership_data(ticker))
+    time.sleep(0.3)
+
+    # Short data
+    data.update(get_short_data(ticker))
+
+    # Score + signals
+    data.update(build_signals_and_scores(data))
+
+    return data
+
+
 def enrich_candidates(candidates: list[dict]) -> list[dict]:
+    """Enrich pentru lista de candidați din scan."""
     if not candidates:
         return []
 
     enriched = []
     total    = len(candidates)
-    print(f"Enrich pentru {total} candidati...")
-    print(f"FMP calls estimate: ~{total * 3} din 250 disponibile")
+    print(f"Enrich scan candidates: {total} tickers")
 
     for i, candidate in enumerate(candidates):
         ticker = (candidate.get("ticker") or "").upper().strip()
         print(f"  [{i+1}/{total}] {ticker}")
-
-        data = {
-            **candidate,
-            "ticker":               ticker,
-            "company_name":         "",
-            "sector":               "",
-            "industry":             "",
-            "pe_ratio":             None,
-            "market_cap":           0,
-            "inst_ownership_pct":   None,
-            "beta":                 None,
-            "insider_buys_90d":     0,
-            "insider_buy_value":    0.0,
-            "insider_sells_90d":    0,
-            "top_insider_role":     "Unknown",
-            "insider_quality_score":0,
-            "short_interest_pct":   None,
-            "short_sale_ratio":     None,
-            "short_sale_volume":    0,
-            "total_volume_reported":0,
-            "short_flow_signal":    "",
-            "ownership_form":       "",
-            "ownership_holder":     "",
-            "ownership_pct":        None,
-            "ownership_signal":     "",
-            "score_ownership":      0,
-        }
-
-        # Call 1: profile (company name, sector, PE, market cap)
-        profile = get_profile(ticker)
-        data.update(profile)
-        time.sleep(0.25)
-
-        # Call 2: insider trades
-        insider = get_insider_trades_fmp(ticker)
-        if (insider.get("insider_buys_90d", 0) == 0 and
-            insider.get("insider_sells_90d", 0) == 0):
-            try:
-                edgar = get_insider_transactions_detailed(ticker)
-                insider["insider_buys_90d"]  = int(edgar.get("insider_buys_90d") or 0)
-                insider["insider_buy_value"] = float(edgar.get("insider_buy_value") or 0)
-                insider["insider_sells_90d"] = int(edgar.get("insider_sells_90d") or 0)
-            except Exception:
-                pass
-        data.update(insider)
-        time.sleep(0.25)
-
-        # Call 3: ownership 13D/13G
-        ownership = get_ownership_data(ticker)
-        data.update(ownership)
-        time.sleep(0.25)
-
-        # Gratuit: yfinance short interest + FINRA short volume
-        short = get_short_data(ticker)
-        data.update(short)
-
-        data.update(build_signals_and_scores(data))
-        enriched.append(data)
+        result = enrich_single(ticker, scan_data=candidate)
+        if result:
+            enriched.append(result)
 
     enriched.sort(key=lambda x: x.get("score", 0), reverse=True)
     if enriched:
         top = enriched[0]
         print(f"\nTop: {top['ticker']} = {top['score']}/100 | {top.get('company_name','')}")
+    return enriched
+
+
+def enrich_watchlist(watchlist_tickers: list[str],
+                     scan_results: list[dict]) -> list[dict]:
+    """
+    Enrich pentru watchlist — independent de scan.
+    Dacă ticker-ul e și în scan, folosește datele de acolo.
+    Dacă nu, trage price/volume din yfinance.
+    """
+    if not watchlist_tickers:
+        return []
+
+    scan_map = {r.get("ticker","").upper(): r for r in (scan_results or [])}
+    enriched = []
+    total    = len(watchlist_tickers)
+    print(f"Enrich watchlist: {total} tickers")
+
+    for i, ticker in enumerate(watchlist_tickers):
+        ticker = ticker.upper().strip()
+        print(f"  [{i+1}/{total}] {ticker} {'(din scan)' if ticker in scan_map else '(watchlist only)'}")
+        scan_data = scan_map.get(ticker)
+        result    = enrich_single(ticker, scan_data=scan_data)
+        if result:
+            enriched.append(result)
+
     return enriched
 
 
@@ -372,8 +419,11 @@ if __name__ == "__main__":
     enriched = enrich_candidates(candidates)
     if enriched:
         save_enriched(enriched)
-        print(f"\nSalvat {len(enriched)} tickers in Supabase")
+        print(f"\nSalvat {len(enriched)} tickers")
         for e in enriched[:10]:
-            print(f"  {e['ticker']:<8} score={e['score']}/100 "
-                  f"{e.get('company_name','')[:25]:<25} "
-                  f"buys={e.get('insider_buys_90d',0)} vol={e.get('vol_ratio',0)}x")
+            print(f"  {e['ticker']:<8} score={e['score']:>3}/100  "
+                  f"vol={e.get('vol_ratio',0)}x  "
+                  f"sf={e.get('short_sale_ratio',0) or 0:.0%}  "
+                  f"si={e.get('short_interest_pct',0) or 0:.1f}%  "
+                  f"buys={e.get('insider_buys_90d',0)}/sells={e.get('insider_sells_90d',0)}  "
+                  f"{e.get('company_name','')[:25]}")
