@@ -146,26 +146,43 @@ if "show_layout" not in st.session_state:
 # ── AI Haiku ───────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def get_haiku(ticker: str, score: int, vol: float, buys: int, buy_val: float,
-              sells: int, role: str, si: float, sector: str, mc: int) -> str:
+              sells: int, sell_val: float, role: str, si: float, sf: float,
+              sector: str, mc: int, ownership_form: str) -> str:
     if not ANTHROPIC_KEY:
         return ""
-    prompt = (f"Analyze {ticker} ({sector}, ${mc/1e6:.0f}M cap) smart money signals. "
-              f"Score {score}/100. Vol {vol}x vs avg. "
-              f"Insider: {buys} buys ${buy_val:,.0f}, {sells} sells, top role: {role}. "
-              f"Short interest: {si}%. "
-              f"Write 3 direct sentences: (1) what volume+insider pattern suggests, "
-              f"(2) what confirms or challenges the thesis, (3) one specific risk. No fluff.")
+
+    # Construiește contextul pentru scor nou (fără insider în scor)
+    score_context = []
+    if vol >= 2:    score_context.append(f"volum {vol}x față de medie (semnal principal)")
+    if sf >= 0.5:   score_context.append(f"short flow {sf*100:.0f}% din volum total")
+    if si >= 10:    score_context.append(f"short interest {si:.1f}% — potențial squeeze")
+    if ownership_form: score_context.append(f"filing {ownership_form} recent")
+    if buys > 0:    score_context.append(f"{buys} cumpărări insider în 90 zile (${buy_val:,.0f}) — context")
+    if sells > 0:   score_context.append(f"{sells} vânzări insider în 90 zile (${sell_val:,.0f}) — monitorizează")
+
+    prompt = (
+        f"Ești un analist financiar concis care scrie în română. "
+        f"Analizează semnalele smart money pentru {ticker} ({sector}, cap ${mc/1e6:.0f}M). "
+        f"Scor: {score}/100. "
+        f"Semnale: {'; '.join(score_context) if score_context else 'niciun semnal semnificativ'}. "
+        f"Scrie exact 3 propoziții în română: "
+        f"(1) ce sugerează pattern-ul de volum și presiune, "
+        f"(2) ce confirmă sau contrazice teza, "
+        f"(3) un risc specific. "
+        f"Fii direct, concret, fără introduceri."
+    )
+
     try:
         r = requests.post("https://api.anthropic.com/v1/messages",
             headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200,
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 250,
                   "messages": [{"role": "user", "content": prompt}]},
             timeout=15)
         r.raise_for_status()
         return r.json()["content"][0]["text"].strip()
     except Exception as e:
-        return f"AI unavailable: {e}"
+        return f"AI indisponibil: {e}"
 
 
 # ── Data loaders ───────────────────────────────────────────────────────────────
@@ -274,21 +291,24 @@ def render_detail(ticker: str):
                     with st.spinner("AI analizează..."):
                         interp = get_haiku(
                             ticker,
-                            int(latest.get("score",0)),
+                            int(latest.get("score", 0)),
                             float(latest.get("vol_ratio") or 0),
                             int(latest.get("insider_buys_90d") or 0),
                             float(latest.get("insider_buy_value") or 0),
                             int(latest.get("insider_sells_90d") or 0),
+                            float(latest.get("insider_sell_value") or 0),
                             str(latest.get("top_insider_role") or "Unknown"),
                             float(latest.get("short_interest_pct") or 0),
+                            float(latest.get("short_sale_ratio") or 0),
                             str(latest.get("sector") or "—"),
                             int(latest.get("market_cap") or 0),
+                            str(latest.get("ownership_form") or ""),
                         )
-                    if interp and not interp.startswith("AI unavailable"):
-                        st.markdown(f'<div class="ai-box"><div class="ai-label">Claude Haiku</div>{interp}</div>',
+                    if interp and not interp.startswith("AI indisponibil"):
+                        st.markdown(f'<div class="ai-box"><div class="ai-label">🤖 Claude Haiku · Interpretare</div>{interp}</div>',
                                     unsafe_allow_html=True)
                 else:
-                    st.caption("Adaugă ANTHROPIC_API_KEY în Secrets pentru AI interpretare.")
+                    st.caption("Adaugă ANTHROPIC_API_KEY în Secrets pentru interpretare AI.")
 
             elif panel == "Istoric":
                 st.markdown("**Istoric (10 zile)**")
