@@ -62,7 +62,8 @@ jobs:
       - name: Rulează faza
         run: python collectors/run.py --phase ${{ steps.phase.outputs.name }}
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          FINNHUB_KEY:  ${{ secrets.FINNHUB_KEY }}
-          FMP_KEY:      ${{ secrets.FMP_KEY }}
+          SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:      ${{ secrets.SUPABASE_KEY }}
+          FINNHUB_KEY:       ${{ secrets.FINNHUB_KEY }}
+          FMP_KEY:           ${{ secrets.FMP_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
