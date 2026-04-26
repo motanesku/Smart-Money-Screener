@@ -104,8 +104,8 @@ with tabs[0]:
         df = _safe_df(data, DISPLAY_COLS + ["confluenta", "persistence_days",
                                               "sector_in_play", "rs_vs_sector"])
         st.dataframe(
-            df.style.map(_score_color, subset=["score"] if "score" in df.columns else []),
-            use_container_width=True,
+            df.reset_index(drop=True),
+            width="stretch",
             height=450,
         )
 
@@ -151,7 +151,7 @@ with tabs[1]:
         st.dataframe(
             df_sec.style.highlight_max(subset=["count", "avg_score", "avg_vol"],
                                         color="#0f5132"),
-            use_container_width=True,
+            width="stretch",
         )
 
         # Bar chart
@@ -176,11 +176,11 @@ with tabs[2]:
         whales = df_p[df_p["appearance_days"] >= 5]
         if not whales.empty:
             st.markdown(f"### 🐳 Whale Suspects ({len(whales)} tickers, 5+ zile)")
-            st.dataframe(whales, use_container_width=True, height=200)
+            st.dataframe(whales, width="stretch", height=200)
             st.divider()
 
         st.markdown("### Toate apariții (2+ zile)")
-        st.dataframe(df_p, use_container_width=True, height=350)
+        st.dataframe(df_p, width="stretch", height=350)
 
         # Bar chart top 15
         top15 = df_p.head(15)
@@ -201,7 +201,7 @@ with tabs[3]:
             row["confluenta"] = _confluence_badge(row)
 
         df_wl = _safe_df(wl, DISPLAY_COLS + ["confluenta", "persistence_days"])
-        st.dataframe(df_wl, use_container_width=True, height=400)
+        st.dataframe(df_wl, width="stretch", height=400)
 
         st.divider()
         ticker_rm = st.text_input("Șterge ticker:", placeholder="AAPL").upper()
