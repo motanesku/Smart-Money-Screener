@@ -78,47 +78,66 @@ def save_enriched(results: list[dict]):
         rows.append({
             "enrich_date":           today,
             "ticker":                (r.get("ticker") or "").upper(),
+            # Companie
             "company_name":          r.get("company_name") or "",
             "sector":                r.get("sector") or "",
             "industry":              r.get("industry") or "",
             "market_cap":            int(r.get("market_cap") or 0),
+            # Volume
             "price":                 r.get("price"),
             "volume":                int(r.get("volume") or 0),
             "avg_volume_20d":        int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
             "vol_ratio":             r.get("vol_ratio"),
+            # Sector context (din scanner)
+            "rs_vs_sector":          r.get("rs_vs_sector"),
+            "sector_heat_score":     int(r.get("sector_heat_score") or 0),
+            # Insider — date reale Form 4
             "insider_buys_90d":      int(r.get("insider_buys_90d") or 0),
             "insider_buy_value":     float(r.get("insider_buy_value") or 0),
             "insider_sells_90d":     int(r.get("insider_sells_90d") or 0),
             "insider_sell_value":    float(r.get("insider_sell_value") or 0),
+            "top_insider_role":      r.get("top_insider_role") or "",
+            "net_insider_signal":    r.get("net_insider_signal") or "",
+            "is_10b5_plan":          bool(r.get("is_10b5_plan", False)),
+            # Institutional
             "inst_ownership_pct":    r.get("inst_ownership_pct"),
-            "pe_ratio":              r.get("pe_ratio"),
-            "beta":                  r.get("beta"),
-            "short_interest_pct":    r.get("short_interest_pct"),
-            "short_sale_volume":     int(r.get("short_sale_volume") or 0),
-            "total_volume_reported": int(r.get("total_volume_reported") or r.get("volume") or 0),
-            "short_sale_ratio":      r.get("short_sale_ratio"),
-            "short_flow_signal":     r.get("short_flow_signal") or "",
-            "short_signal":          r.get("short_signal") or "",
+            # Ownership 13D/13G
             "ownership_form":        r.get("ownership_form") or "",
             "ownership_holder":      r.get("ownership_holder") or "",
             "ownership_pct":         r.get("ownership_pct"),
             "ownership_signal":      r.get("ownership_signal") or "",
             "ownership_signal_text": r.get("ownership_signal_text") or "",
-            # ── Scoruri — FIX: toate luate din enricher, niciuna hardcodată ──
+            # Short — date reale FINRA
+            "short_interest_pct":    r.get("short_interest_pct"),
+            "short_sale_volume":     int(r.get("short_sale_volume") or 0),
+            "total_volume_reported": int(r.get("total_volume_reported") or r.get("volume") or 0),
+            "short_sale_ratio":      r.get("short_sale_ratio"),
+            "avg_short_ratio_5d":    r.get("avg_short_ratio_5d"),
+            "squeeze_setup":         bool(r.get("squeeze_setup", False)),
+            "short_flow_signal":     r.get("short_flow_signal") or "",
+            "short_signal":          r.get("short_signal") or "",
+            "short_squeeze_signal":  r.get("short_squeeze_signal") or "",
+            # Accumulation pattern
+            "sideways_signal":       r.get("sideways_signal") or "",
+            # Fundamentals
+            "pe_ratio":              r.get("pe_ratio"),
+            "beta":                  r.get("beta"),
+            # Scoruri
             "score":                 int(r.get("score") or 0),
             "score_volume":          int(r.get("score_volume") or 0),
-            "score_insider":         int(r.get("score_insider") or 0),          # FIX
-            "score_insider_quality": int(r.get("score_insider_quality") or 0),  # FIX
+            "score_insider":         int(r.get("score_insider") or 0),
+            "score_insider_quality": int(r.get("score_insider_quality") or 0),
             "score_ownership":       int(r.get("score_ownership") or 0),
             "score_short_interest":  int(r.get("score_short_interest") or 0),
             "score_short_flow":      int(r.get("score_short_flow") or 0),
-            "score_fundamental":     int(r.get("score_fundamental") or 0),      # FIX
+            "score_fundamental":     int(r.get("score_fundamental") or 0),
             "score_penalty":         int(r.get("score_penalty") or 0),
-            # ── Semnale ──
+            # Semnale text
             "volume_signal":         r.get("volume_signal") or "",
             "insider_signal":        r.get("insider_signal") or "",
             "thesis":                r.get("thesis") or "",
-            "top_insider_role":      r.get("top_insider_role") or "Unknown",
+            # AI Analysis (Haiku — gol dacă score < 60 sau API key lipsă)
+            "ai_thesis_ro":          r.get("ai_thesis_ro") or "",
         })
     get_client().table("enriched").upsert(rows, on_conflict="enrich_date,ticker").execute()
 
