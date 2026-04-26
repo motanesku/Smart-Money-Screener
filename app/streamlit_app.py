@@ -1,9 +1,10 @@
 """
-Streamlit UI v3 — Smart Money Screener
-- Tab Candidates: tabel + badge CONFLUENȚĂ + Analiză AI per ticker
-- Tab Sector Heatmap: sectoare In Play (>= 5 tickers activi)
+Streamlit UI v4 — Smart Money Screener
+- Tab Bullish Setups:  acumulare instituțională (call sweep + vol spike + sideways)
+- Tab Bearish Setups:  distribuție / short oportunități (put sweep + short building)
+- Tab Sector Heatmap:  rotație capital pe sectoare
 - Tab Whale Persistence: footprint instituțional 21 zile
-- Tab Watchlist: monitorizare manuală cu enrich live
+- Tab Watchlist:       monitorizare manuală
 """
 import sys
 sys.path.insert(0, ".")
@@ -20,40 +21,41 @@ st.set_page_config(page_title="Smart Money Screener", layout="wide", page_icon="
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap');
-html, body, [class*="st-"] { font-family: 'IBM Plex Mono', monospace; }
-.badge-confluence { background:#0969da; color:white; padding:2px 8px;
-    border-radius:4px; font-size:11px; font-weight:600; }
-.badge-inplay { background:#d93025; color:white; padding:2px 8px;
-    border-radius:4px; font-size:11px; font-weight:600; }
-.badge-persistent { background:#6f42c1; color:white; padding:2px 8px;
-    border-radius:4px; font-size:11px; font-weight:600; }
+html, body, [class*="st-"] { font-family: 'IBM Plex Mono', monospace; font-size: 13px; }
 .ai-box { background:#0d1117; border:1px solid #30363d; border-radius:8px;
-    padding:14px 18px; margin-top:8px; font-size:13px; line-height:1.6; }
+    padding:14px 18px; margin-top:8px; line-height:1.7; }
+.bull { color: #3fb950; font-weight: 600; }
+.bear { color: #f85149; font-weight: 600; }
+.dist { color: #d29922; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📡 Smart Money Screener")
 
-# ── Helpers ─────────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-DISPLAY_COLS = [
+BULL_COLS = [
     "ticker", "company_name_display", "sector", "price", "vol_ratio",
-    "insider_buys_90d", "insider_sells_90d", "net_insider_signal",
-    "squeeze_setup", "persistence_days", "score", "thesis",
+    "options_signal", "pc_ratio", "squeeze_setup",
+    "persistence_days", "score", "thesis",
+]
+
+BEAR_COLS = [
+    "ticker", "company_name_display", "sector", "price", "vol_ratio",
+    "options_signal", "pc_ratio", "short_signal", "short_float_pct",
+    "net_insider_signal", "score", "thesis",
 ]
 
 
-def _safe_df(data: list[dict], cols: list[str] | None = None) -> pd.DataFrame:
+def _safe_df(data: list[dict], cols: list[str]) -> pd.DataFrame:
     if not data:
         return pd.DataFrame()
     df = pd.DataFrame(data)
-    if cols:
-        present = [c for c in cols if c in df.columns]
-        df = df[present]
-    return df
+    present = [c for c in cols if c in df.columns]
+    return df[present]
 
 
-def _confluence_badge(row) -> str:
+def _confluence(row) -> str:
     score   = float(row.get("score") or 0)
     persist = int(row.get("persistence_days") or 0)
     vol     = float(row.get("vol_ratio") or 0)
@@ -64,131 +66,198 @@ def _confluence_badge(row) -> str:
     return ""
 
 
-def _generate_ai(row: dict) -> str:
-    """Apelează Haiku live pentru un ticker — folosit din butonul manual."""
-    try:
-        from collectors.enricher import get_ai_thesis
-        return get_ai_thesis(row)
-    except Exception as e:
-        return f"Eroare: {e}"
+def _dir_icon(direction: str) -> str:
+    return {"BULLISH": "🟢", "BEARISH": "🔴", "DISTRIBUTION": "🟠", "NEUTRAL": "⚪"}.get(direction, "⚪")
 
 
 def _render_ai_panel(row: dict, key_suffix: str):
-    """Afișează AI thesis dacă există sau buton de generare dacă nu există."""
     ai_text = (row.get("ai_thesis_ro") or "").strip()
     if ai_text:
-        st.success("🤖 Analiză AI disponibilă (generată la enrich)")
+        st.success("🤖 Analiză AI disponibilă")
         st.markdown(f'<div class="ai-box">{ai_text}</div>', unsafe_allow_html=True)
     else:
-        if st.button(f"🤖 Generează Analiză AI", key=f"ai_btn_{key_suffix}"):
+        if st.button("🤖 Generează Analiză AI", key=f"ai_{key_suffix}"):
             with st.spinner("Claude Haiku analizează..."):
-                result = _generate_ai(row)
+                try:
+                    from collectors.enricher import get_ai_thesis
+                    result = get_ai_thesis(row)
+                except Exception as e:
+                    result = f"Eroare: {e}"
             if result:
                 st.markdown(f'<div class="ai-box">{result}</div>', unsafe_allow_html=True)
             else:
-                st.warning("Setează variabila de mediu ANTHROPIC_API_KEY și asigură-te că score >= 60.")
+                st.warning("Setează ANTHROPIC_API_KEY și asigură-te că score ≥ 55.")
 
 
-# ── Tabs ─────────────────────────────────────────────────────────────────────────
+def _render_detail_row(row: dict, key_suffix: str):
+    """Expander complet pentru un ticker — date options + short + insider + AI."""
+    ticker    = row.get("ticker", "")
+    company   = row.get("company_name_display") or row.get("company_name") or ""
+    score     = row.get("score", 0)
+    direction = row.get("direction", "NEUTRAL")
+    icon      = _dir_icon(direction)
+    conf      = _confluence(row)
 
-tabs = st.tabs(["🚀 Candidates", "🌡️ Sector Heatmap", "🐳 Whale Persistence", "⭐ Watchlist"])
+    label = f"{icon} {ticker}  |  {company}  |  Score: {score}  |  {conf}"
+    with st.expander(label, expanded=False):
 
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Score",       score)
+        m2.metric("Vol Ratio",   f"{row.get('vol_ratio',0):.1f}x")
+        m3.metric("P/C Ratio",   f"{row.get('pc_ratio','N/A')}")
+        m4.metric("Persistență", f"{row.get('persistence_days',0)}d/21d")
+        m5.metric("Short Ratio", f"{row.get('short_sale_ratio') or row.get('short_float_pct') or 'N/A'}")
+        m6.metric("Inst. Own",   f"{row.get('inst_own_pct') or 'N/A'}")
 
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 1: Candidates
-# ─────────────────────────────────────────────────────────────────────────────────
-with tabs[0]:
-    st.subheader("Candidați Smart Money")
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        days_back = st.selectbox("Perioada", [1, 3, 7], index=0)
-    with col2:
-        min_score = st.slider("Scor minim", 0, 100, 30, step=10)
-    with col3:
-        only_confluence = st.checkbox("Doar CONFLUENȚĂ", value=False)
-
-    data = get_enriched(days_back=days_back, min_score=min_score)
-
-    if not data:
-        st.info("Niciun candidat găsit. Rulează `python collectors/run.py --phase enrich`")
-    else:
-        for row in data:
-            row["confluenta"] = _confluence_badge(row)
-
-        if only_confluence:
-            data = [r for r in data if "CONFLUENȚĂ" in r.get("confluenta", "")]
-
-        df = _safe_df(data, DISPLAY_COLS + ["confluenta", "sector_in_play", "rs_vs_sector"])
-        st.dataframe(df.reset_index(drop=True), use_container_width=True, height=400)
-
-        confluence_rows = [r for r in data if "CONFLUENȚĂ" in r.get("confluenta", "")]
-        n_confluence = len(confluence_rows)
-        n_ai_ready   = sum(1 for r in confluence_rows if r.get("ai_thesis_ro"))
-        st.caption(
-            f"Total: {len(df)} tickers | "
-            f"🔥 Confluență: {n_confluence} | "
-            f"🤖 AI analizat: {n_ai_ready}/{n_confluence}"
+        st.markdown(f"**Thesis:** {row.get('thesis','')}")
+        st.markdown(
+            f"**Options:** {row.get('options_signal','')} | "
+            f"Calls neobișnuite: {row.get('unusual_call_strikes',0)} strike-uri | "
+            f"Puts neobișnuite: {row.get('unusual_put_strikes',0)} strike-uri"
         )
 
-        # ── Secțiunea AI Analysis (doar pentru tickers cu CONFLUENȚĂ) ──────────
-        if confluence_rows:
-            st.divider()
-            st.subheader(f"🔥 Analiză AI — {n_confluence} Confluențe Detectate")
-            st.caption(
-                "Analizele pre-generate sunt salvate în Supabase la faza `enrich` (score ≥ 60). "
-                "Poți genera live oricând cu butonul de mai jos."
+        ins_buy  = row.get("insider_buys_90d", 0)
+        ins_sell = row.get("insider_sells_90d", 0)
+        if ins_buy or ins_sell:
+            buy_val  = row.get("insider_buy_value") or 0
+            sell_val = row.get("insider_sell_value") or 0
+            role     = row.get("top_insider_role", "")
+            plan_note = " [10b5-1 plan]" if row.get("is_10b5_plan") else ""
+            st.markdown(
+                f"**Insider (context):** {ins_buy}× buy ${buy_val:,.0f} / "
+                f"{ins_sell}× sell ${sell_val:,.0f}{plan_note} — *{role}*"
             )
 
-            for row in confluence_rows:
-                ticker   = row.get("ticker", "N/A")
-                company  = row.get("company_name_display") or row.get("company_name") or ""
-                score    = row.get("score", 0)
-                vol      = row.get("vol_ratio", 0)
-                persist  = row.get("persistence_days", 0)
-                sector   = row.get("sector", "")
-                squeeze  = "✅ SQUEEZE SETUP" if row.get("squeeze_setup") else ""
-                net_sig  = row.get("net_insider_signal", "")
+        _render_ai_panel(row, key_suffix=key_suffix)
 
-                label = f"🔥 {ticker}  |  {company}  |  Score: {score}  |  Vol: {vol:.1f}x  |  {sector}"
-                with st.expander(label, expanded=False):
-                    m1, m2, m3, m4, m5 = st.columns(5)
-                    m1.metric("Score", score)
-                    m2.metric("Vol Ratio", f"{vol:.1f}x")
-                    m3.metric("Persistență", f"{persist}d/21d")
-                    m4.metric("Insider Net", net_sig or "N/A")
-                    m5.metric("Short Squeeze", squeeze or "—")
 
-                    st.markdown(f"**Thesis:** {row.get('thesis','')}")
+# ── Tabs ──────────────────────────────────────────────────────────────────────
 
-                    if row.get("insider_buys_90d") or row.get("insider_sells_90d"):
-                        ins_buy  = row.get("insider_buys_90d", 0)
-                        ins_sell = row.get("insider_sells_90d", 0)
-                        buy_val  = row.get("insider_buy_value") or 0
-                        sell_val = row.get("insider_sell_value") or 0
-                        role     = row.get("top_insider_role", "")
-                        plan     = " [10b5-1]" if row.get("is_10b5_plan") else ""
-                        st.markdown(
-                            f"**Insider:** {ins_buy} buy (${buy_val:,.0f}) / "
-                            f"{ins_sell} sell (${sell_val:,.0f}){plan} — *{role}*"
-                        )
+tabs = st.tabs([
+    "🟢 Bullish Setups",
+    "🔴 Bearish / Distribution",
+    "🌡️ Sector Heatmap",
+    "🐳 Whale Persistence",
+    "⭐ Watchlist",
+])
 
-                    _render_ai_panel(row, key_suffix=ticker)
 
-        # ── Add to Watchlist ──────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 1: Bullish Setups
+# ─────────────────────────────────────────────────────────────────────────────
+with tabs[0]:
+    st.subheader("🟢 Bullish Setups — Acumulare Instituțională")
+    st.caption(
+        "Call sweep + vol spike + sideways pattern = instituție care acumulează discret. "
+        "Short squeeze setup = balenele știu că shorterii vor capitula."
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        days_back  = st.selectbox("Perioadă", [1, 3, 7], index=0, key="bull_days")
+    with col2:
+        min_score  = st.slider("Scor minim", 0, 100, 20, step=10, key="bull_score")
+    with col3:
+        only_conf  = st.checkbox("Doar CONFLUENȚĂ", key="bull_conf")
+    with col4:
+        show_neut  = st.checkbox("Include NEUTRAL", value=True, key="bull_neut")
+
+    all_data = get_enriched(days_back=days_back, min_score=min_score)
+
+    bull_data = [
+        r for r in all_data
+        if r.get("direction") in (["BULLISH"] + (["NEUTRAL"] if show_neut else []))
+    ]
+
+    for r in bull_data:
+        r["confluenta"] = _confluence(r)
+
+    if only_conf:
+        bull_data = [r for r in bull_data if "CONFLUENȚĂ" in r.get("confluenta", "")]
+
+    if not bull_data:
+        st.info("Niciun setup bullish găsit. Rulează `python collectors/run.py --phase enrich`")
+    else:
+        df_bull = _safe_df(bull_data, BULL_COLS + ["confluenta", "direction"])
+        st.dataframe(df_bull.reset_index(drop=True), use_container_width=True, height=380)
+
+        n_bull = sum(1 for r in bull_data if r.get("direction") == "BULLISH")
+        n_sq   = sum(1 for r in bull_data if r.get("squeeze_setup"))
+        n_call = sum(1 for r in bull_data if "CALL" in (r.get("options_signal") or ""))
+        n_ai   = sum(1 for r in bull_data if r.get("ai_thesis_ro"))
+        st.caption(
+            f"Total: {len(bull_data)} | 🟢 BULLISH: {n_bull} | "
+            f"🔥 Squeeze setups: {n_sq} | 📞 Call sweep: {n_call} | 🤖 AI: {n_ai}"
+        )
+
         st.divider()
-        ticker_add = st.text_input("Adaugă ticker în Watchlist:", placeholder="AAPL").upper()
-        if st.button("➕ Add to Watchlist") and ticker_add:
-            add_to_watchlist(ticker_add)
-            st.success(f"{ticker_add} adăugat!")
+        st.subheader("Analiză Detaliată")
+        priority = [r for r in bull_data if r.get("direction") == "BULLISH"] or bull_data
+        for row in priority[:20]:
+            _render_detail_row(row, key_suffix=f"bull_{row['ticker']}")
+
+    st.divider()
+    ticker_add = st.text_input("Adaugă în Watchlist:", placeholder="NVDA").upper()
+    if st.button("➕ Add to Watchlist", key="bull_add") and ticker_add:
+        add_to_watchlist(ticker_add)
+        st.success(f"{ticker_add} adăugat!")
 
 
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 2: Sector Heatmap
-# ─────────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 2: Bearish / Distribution
+# ─────────────────────────────────────────────────────────────────────────────
 with tabs[1]:
+    st.subheader("🔴 Bearish Setups — Distribuție / Short Oportunități")
+    st.caption(
+        "Put sweep = instituție se hedgează sau pariază la scădere. "
+        "Distribuție = volum spike la prețuri mari + insider selling + put dominant."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        bear_days  = st.selectbox("Perioadă", [1, 3, 7], index=0, key="bear_days")
+    with col2:
+        bear_score = st.slider("Scor minim", 0, 100, 15, step=5, key="bear_score")
+
+    all_bear = get_enriched(days_back=bear_days, min_score=bear_score)
+    bear_data = [
+        r for r in all_bear
+        if r.get("direction") in ("BEARISH", "DISTRIBUTION")
+    ]
+
+    if not bear_data:
+        st.info("Niciun setup bearish detectat în perioada selectată.")
+        st.markdown(
+            "**Ce cauți manual:** tickers cu `options_signal = UNUSUAL_PUT_BUYING` "
+            "sau `direction = DISTRIBUTION` + `net_insider_signal = DISTRIBUTION`"
+        )
+    else:
+        df_bear = _safe_df(bear_data, BEAR_COLS + ["direction"])
+        st.dataframe(
+            df_bear.reset_index(drop=True),
+            use_container_width=True,
+            height=350,
+        )
+
+        n_dist = sum(1 for r in bear_data if r.get("direction") == "DISTRIBUTION")
+        n_put  = sum(1 for r in bear_data if "PUT" in (r.get("options_signal") or ""))
+        st.caption(
+            f"Total: {len(bear_data)} | 🟠 DISTRIBUȚIE: {n_dist} | 🔴 BEARISH: {len(bear_data)-n_dist} | "
+            f"Put sweep: {n_put}"
+        )
+
+        st.divider()
+        st.subheader("Analiză Detaliată")
+        for row in bear_data[:15]:
+            _render_detail_row(row, key_suffix=f"bear_{row['ticker']}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 3: Sector Heatmap
+# ─────────────────────────────────────────────────────────────────────────────
+with tabs[2]:
     st.subheader("🌡️ Sector Heatmap — Rotație Capital")
-    st.caption("Sectoarele cu 5+ tickers active sunt marcate **IN PLAY** — Smart Money rotates here")
+    st.caption("5+ tickers activi în același sector = Smart Money rotează acolo")
 
     sector_data = get_sector_stats(days_back=1)
 
@@ -209,22 +278,19 @@ with tabs[1]:
                         delta=f"avg vol {row['avg_vol']}x",
                     )
         st.divider()
-
         st.dataframe(
-            df_sec.style.highlight_max(
-                subset=["count", "avg_score", "avg_vol"], color="#0f5132"
-            ),
+            df_sec.style.highlight_max(subset=["count", "avg_score", "avg_vol"], color="#0f5132"),
             use_container_width=True,
         )
         st.bar_chart(df_sec.set_index("sector")["count"])
 
 
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 3: Whale Persistence
-# ─────────────────────────────────────────────────────────────────────────────────
-with tabs[2]:
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 4: Whale Persistence
+# ─────────────────────────────────────────────────────────────────────────────
+with tabs[3]:
     st.subheader("🐳 Whale Footprint — Persistență 21 Zile")
-    st.caption("Tickers care au apărut repetat în scan = acumulare instituțională continuă")
+    st.caption("Apariții repetate în scan = acumulare instituțională continuă, nu zgomot")
 
     persist_data = get_persistence_stats(days_back=21)
 
@@ -240,39 +306,32 @@ with tabs[2]:
             st.divider()
 
         st.markdown("### Toate apariții (2+ zile)")
-        st.dataframe(df_p, use_container_width=True, height=350)
-
-        top15 = df_p.head(15)
-        st.bar_chart(top15.set_index("ticker")["appearance_days"])
+        st.dataframe(df_p, use_container_width=True, height=320)
+        st.bar_chart(df_p.head(15).set_index("ticker")["appearance_days"])
 
 
-# ─────────────────────────────────────────────────────────────────────────────────
-# TAB 4: Watchlist
-# ─────────────────────────────────────────────────────────────────────────────────
-with tabs[3]:
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 5: Watchlist
+# ─────────────────────────────────────────────────────────────────────────────
+with tabs[4]:
     st.subheader("⭐ Watchlist")
 
     wl = get_watchlist_enriched()
     if not wl:
-        st.info("Watchlist gol. Adaugă tickers din tab Candidates.")
+        st.info("Watchlist gol. Adaugă tickers din tab Bullish sau Bearish.")
     else:
+        for r in wl:
+            r["confluenta"] = _confluence(r)
+            r["dir_icon"]   = _dir_icon(r.get("direction", "NEUTRAL"))
+
+        wl_cols = ["ticker", "company_name_display", "sector", "price", "direction",
+                   "vol_ratio", "options_signal", "score", "thesis"]
+        st.dataframe(_safe_df(wl, wl_cols + ["confluenta"]), use_container_width=True, height=320)
+
+        st.divider()
+        st.subheader("Analiză Detaliată Watchlist")
         for row in wl:
-            row["confluenta"] = _confluence_badge(row)
-
-        df_wl = _safe_df(wl, DISPLAY_COLS + ["confluenta"])
-        st.dataframe(df_wl, use_container_width=True, height=350)
-
-        # AI panels pentru watchlist
-        wl_confluence = [r for r in wl if "CONFLUENȚĂ" in r.get("confluenta", "")]
-        if wl_confluence:
-            st.divider()
-            st.subheader("🔥 Confluențe în Watchlist")
-            for row in wl_confluence:
-                ticker = row.get("ticker", "N/A")
-                score  = row.get("score", 0)
-                with st.expander(f"🔥 {ticker} | Score: {score}", expanded=False):
-                    st.markdown(f"**Thesis:** {row.get('thesis','')}")
-                    _render_ai_panel(row, key_suffix=f"wl_{ticker}")
+            _render_detail_row(row, key_suffix=f"wl_{row['ticker']}")
 
         st.divider()
         ticker_rm = st.text_input("Șterge ticker:", placeholder="AAPL").upper()

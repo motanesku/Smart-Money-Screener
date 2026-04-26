@@ -68,15 +68,30 @@ CREATE TABLE enriched (
     is_10b5_plan            BOOLEAN       NOT NULL DEFAULT FALSE,
     insider_quality_score   INTEGER       NOT NULL DEFAULT 0,
 
-    -- Institutional
-    inst_ownership_pct      NUMERIC(8,4),
+    -- Institutional (din yfinance — fără API key nou)
+    inst_own_pct            FLOAT,
+    inst_ownership_pct      NUMERIC(8,4),   -- legacy alias
+    short_float_pct         FLOAT,
+    short_ratio_days        FLOAT,
+    float_shares            BIGINT,
 
-    -- Ownership 13D/13G
+    -- Ownership 13D/13G (placeholder)
     ownership_form          TEXT          NOT NULL DEFAULT '',
     ownership_holder        TEXT          NOT NULL DEFAULT '',
     ownership_pct           NUMERIC(8,4),
     ownership_signal        TEXT          NOT NULL DEFAULT '',
     ownership_signal_text   TEXT          NOT NULL DEFAULT '',
+
+    -- Options flow (NOU v4 — yfinance)
+    call_volume             BIGINT        DEFAULT 0,
+    put_volume              BIGINT        DEFAULT 0,
+    pc_ratio                FLOAT,
+    call_vol_oi_ratio       FLOAT,
+    unusual_call_strikes    INTEGER       DEFAULT 0,
+    unusual_put_strikes     INTEGER       DEFAULT 0,
+    options_signal          TEXT          NOT NULL DEFAULT '',
+    options_direction       TEXT          NOT NULL DEFAULT '',
+    options_signal_text     TEXT          NOT NULL DEFAULT '',
 
     -- Short (FINRA real)
     short_interest_pct      NUMERIC(8,4),
@@ -92,13 +107,23 @@ CREATE TABLE enriched (
     -- Accumulation pattern
     sideways_signal         TEXT          NOT NULL DEFAULT '',
 
+    -- Volume în USD (large cap fix)
+    vol_usd                 NUMERIC(18,0) DEFAULT 0,
+
     -- Fundamentals
     pe_ratio                NUMERIC(10,4),
     beta                    NUMERIC(8,4),
 
-    -- Scoruri: Volume(40) + Insider(30) + Persistence(20) + Short(30) + Sideways(15) - Penalty
+    -- Direcție detectată (BULLISH / BEARISH / DISTRIBUTION / NEUTRAL)
+    direction               TEXT          NOT NULL DEFAULT 'NEUTRAL',
+
+    -- Scoruri v4: Volume(40) + Options(30) + Short(20) + Sideways(10)
     score                   INTEGER       NOT NULL DEFAULT 0,
     score_volume            INTEGER       NOT NULL DEFAULT 0,
+    score_options           INTEGER       NOT NULL DEFAULT 0,
+    score_short             INTEGER       NOT NULL DEFAULT 0,
+    score_sideways          INTEGER       NOT NULL DEFAULT 0,
+    -- Legacy scoruri (backward compat)
     score_insider           INTEGER       NOT NULL DEFAULT 0,
     score_insider_quality   INTEGER       NOT NULL DEFAULT 0,
     score_ownership         INTEGER       NOT NULL DEFAULT 0,
@@ -112,8 +137,6 @@ CREATE TABLE enriched (
     insider_signal          TEXT          NOT NULL DEFAULT '',
     short_signal_text       TEXT          NOT NULL DEFAULT '',
     thesis                  TEXT          NOT NULL DEFAULT '',
-
-    -- AI Analysis (Claude Haiku — generată dacă score >= 60)
     ai_thesis_ro            TEXT          NOT NULL DEFAULT '',
 
     created_at              TIMESTAMPTZ   DEFAULT NOW(),
@@ -134,6 +157,7 @@ CREATE INDEX idx_enriched_date        ON enriched(enrich_date DESC);
 CREATE INDEX idx_enriched_score       ON enriched(score DESC);
 CREATE INDEX idx_enriched_ticker      ON enriched(ticker, enrich_date DESC);
 CREATE INDEX idx_enriched_sector      ON enriched(sector);
+CREATE INDEX idx_enriched_direction   ON enriched(direction, enrich_date DESC);
 CREATE INDEX idx_enriched_ai          ON enriched(ai_thesis_ro) WHERE ai_thesis_ro != '';
 
 -- ── Views ─────────────────────────────────────────────────────────────────────

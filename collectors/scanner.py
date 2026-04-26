@@ -8,9 +8,13 @@ import sys
 import yfinance as yf
 import pandas as pd
 
-MIN_VOL_RATIO = 2.0
-MIN_PRICE     = 5.0
-TOP_N         = 50
+MIN_VOL_RATIO  = 2.0
+MIN_PRICE      = 5.0
+TOP_N          = 60   # mărit la 60 pentru a include mai mult large cap
+# Large cap fix: spike absolut > 50M$ trece chiar dacă ratio e 1.5x
+# NVDA la 1.6x vol_ratio poate fi $4B+ de volum — asta nu e zgomot
+MIN_VOL_USD_LARGE_CAP = 50_000_000   # $50M volum absolut
+MIN_VOL_RATIO_LARGE_CAP = 1.5        # prag redus pentru large cap
 
 SECTOR_ETFS = {
     "Energy":                "XLE",
@@ -117,7 +121,16 @@ def run_scan(tickers: list[str], universe: list[dict] | None = None) -> list[dic
                 continue
 
             vol_ratio = vol_today / avg_vol
-            if vol_ratio < MIN_VOL_RATIO:
+            vol_usd   = vol_today * price
+
+            # Large cap trece cu 1.5x ratio dacă volumul absolut > $50M
+            # Normal: 2.0x ratio (orice market cap)
+            passes_ratio  = vol_ratio >= MIN_VOL_RATIO
+            passes_largecap = (
+                vol_ratio >= MIN_VOL_RATIO_LARGE_CAP
+                and vol_usd >= MIN_VOL_USD_LARGE_CAP
+            )
+            if not passes_ratio and not passes_largecap:
                 continue
 
             perf_ticker = (price / prev_price) - 1
@@ -135,9 +148,10 @@ def run_scan(tickers: list[str], universe: list[dict] | None = None) -> list[dic
                 "volume":         int(vol_today),
                 "avg_volume_20d": int(avg_vol),
                 "vol_ratio":      round(vol_ratio, 2),
+                "vol_usd":        round(vol_usd, 0),
                 "raw_perf":       round(perf_ticker, 4),
                 "sector":         sector,
-                "rs_vs_sector":   rs_vs_sector,   # NOU
+                "rs_vs_sector":   rs_vs_sector,
             })
         except Exception:
             continue

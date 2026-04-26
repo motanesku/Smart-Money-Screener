@@ -132,11 +132,36 @@ def save_enriched(results: list[dict]):
             "score_short_flow":      int(r.get("score_short_flow") or 0),
             "score_fundamental":     int(r.get("score_fundamental") or 0),
             "score_penalty":         int(r.get("score_penalty") or 0),
+            # Options flow (NOU v4)
+            "call_volume":           int(r.get("call_volume") or 0),
+            "put_volume":            int(r.get("put_volume") or 0),
+            "pc_ratio":              r.get("pc_ratio"),
+            "call_vol_oi_ratio":     r.get("call_vol_oi_ratio"),
+            "unusual_call_strikes":  int(r.get("unusual_call_strikes") or 0),
+            "unusual_put_strikes":   int(r.get("unusual_put_strikes") or 0),
+            "options_signal":        r.get("options_signal") or "",
+            "options_direction":     r.get("options_direction") or "",
+            "options_signal_text":   r.get("options_signal_text") or "",
+            # Direcție (NOU v4)
+            "direction":             r.get("direction") or "NEUTRAL",
+            # Volume USD (large cap fix)
+            "vol_usd":               int(r.get("vol_usd") or 0),
+            # Institutional (din yfinance — fără API key nou)
+            "inst_own_pct":          r.get("inst_own_pct"),
+            "short_float_pct":       r.get("short_float_pct"),
+            "short_ratio_days":      r.get("short_ratio_days"),
+            "float_shares":          int(r.get("float_shares") or 0) if r.get("float_shares") else None,
+            # Scoruri noi (v4 — insider scos)
+            "score_options":         int(r.get("score_options") or 0),
+            "score_short":           int(r.get("score_short") or r.get("score_short_interest") or 0),
+            "score_sideways":        int(r.get("score_sideways") or r.get("score_short_flow") or 0),
             # Semnale text
             "volume_signal":         r.get("volume_signal") or "",
             "insider_signal":        r.get("insider_signal") or "",
+            "short_squeeze_signal":  r.get("short_squeeze_signal") or "",
+            "sideways_signal":       r.get("sideways_signal") or "",
             "thesis":                r.get("thesis") or "",
-            # AI Analysis (Haiku — gol dacă score < 60 sau API key lipsă)
+            # AI Analysis
             "ai_thesis_ro":          r.get("ai_thesis_ro") or "",
         })
     get_client().table("enriched").upsert(rows, on_conflict="enrich_date,ticker").execute()
