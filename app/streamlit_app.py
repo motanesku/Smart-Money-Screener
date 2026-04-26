@@ -340,16 +340,28 @@ def render_detail(ticker: str):
 
 
 # ── Header ─────────────────────────────────────────────────────────────────────
-h1, h2 = st.columns([9, 1])
-with h1:
-    st.markdown(f"""<div class="smm-header">
-  <div><div class="smm-title">📡 SMART MONEY SCREENER</div>
-  <div class="smm-subtitle">volume spikes · insider activity · short flows · ownership signals</div></div>
-  <div class="smm-date">{date.today().strftime('%d %b %Y')}</div>
+st.markdown(f"""<div style="margin:-1rem -1rem 1rem -1rem;padding:12px 18px;background:{BG2};border-bottom:1px solid {BORDER};">
+  <div style="display:flex;align-items:center;justify-content:space-between;">
+    <div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:1rem;font-weight:600;color:{ACCENT};letter-spacing:.04em;margin-bottom:4px;">
+        📡 SMART MONEY SCREENER
+      </div>
+      <div style="font-size:.72rem;color:{MUTED};font-family:'IBM Plex Mono',monospace;margin-bottom:4px;">
+        volume spikes · insider activity · short flows · ownership signals
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:.72rem;color:{MUTED};margin-bottom:8px;">
+        {date.today().strftime('%d %b %Y')}
+      </div>
+    </div>
+  </div>
 </div>""", unsafe_allow_html=True)
-with h2:
-    st.write("")
-    if st.button("⚙️ Layout"):
+
+# Layout button
+col1, col2, col3 = st.columns([10, 1, 0.5])
+with col3:
+    if st.button("⚙️", key="layout_btn", help="Configurare layout"):
         st.session_state.show_layout = not st.session_state.show_layout
         st.rerun()
 
