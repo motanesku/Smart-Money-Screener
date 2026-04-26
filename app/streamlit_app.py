@@ -104,7 +104,7 @@ with tabs[0]:
         df = _safe_df(data, DISPLAY_COLS + ["confluenta", "persistence_days",
                                               "sector_in_play", "rs_vs_sector"])
         st.dataframe(
-            df.style.applymap(_score_color, subset=["score"] if "score" in df.columns else []),
+            df.style.map(_score_color, subset=["score"] if "score" in df.columns else []),
             use_container_width=True,
             height=450,
         )
