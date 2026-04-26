@@ -1,6 +1,6 @@
 """
-Scanner v11 — Detectează volume spikes și calculează Relative Strength față de Sector.
-Integrat cu logica originală de yfinance bulk download.
+Scanner v11 — FULL CODE
+Detectează volume spikes și pregătește datele pentru Relative Strength.
 """
 import sys
 import yfinance as yf
@@ -36,10 +36,6 @@ def run_scan(tickers: list[str]) -> list[dict]:
         progress=False,
     )
     
-    # 2. Download Sector Data pentru Relative Strength
-    sector_symbols = list(set(SECTOR_ETFS.values()))
-    sectors_raw = yf.download(sector_symbols, period="2d", interval="1d", progress=False)['Close']
-
     candidates = []
     for ticker in tickers:
         try:
@@ -63,7 +59,7 @@ def run_scan(tickers: list[str]) -> list[dict]:
 
             vol_ratio = vol_today / avg_vol
             if vol_ratio >= MIN_VOL_RATIO:
-                # Calcul performanță ticker (pentru Relative Strength în enricher)
+                # Calcul performanță ticker pentru Relative Strength
                 perf_ticker = (price / prev_price) - 1
                 
                 candidates.append({
@@ -79,7 +75,7 @@ def run_scan(tickers: list[str]) -> list[dict]:
 
     candidates.sort(key=lambda x: x["vol_ratio"], reverse=True)
     result = candidates[:TOP_N]
-    print(f"Găsiți {len(result)} candidați (vol_ratio >= {MIN_VOL_RATIO}x)")
+    print(f"Găsiți {len(result)} candidați.")
     return result
 
 if __name__ == "__main__":
@@ -87,7 +83,6 @@ if __name__ == "__main__":
     from app.db import get_universe, save_scan_results
     universe = get_universe()
     if not universe:
-        print("EROARE: Universe gol")
         sys.exit(1)
     tickers_list = [u['ticker'] for u in universe]
     results = run_scan(tickers_list)
