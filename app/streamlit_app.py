@@ -101,8 +101,7 @@ with tabs[0]:
         if only_confluence:
             data = [r for r in data if "CONFLUENȚĂ" in r.get("confluenta", "")]
 
-        df = _safe_df(data, DISPLAY_COLS + ["confluenta", "persistence_days",
-                                              "sector_in_play", "rs_vs_sector"])
+        df = _safe_df(data, DISPLAY_COLS + ["confluenta", "sector_in_play", "rs_vs_sector"])
         st.dataframe(
             df.reset_index(drop=True),
             width="stretch",
@@ -200,7 +199,7 @@ with tabs[3]:
         for row in wl:
             row["confluenta"] = _confluence_badge(row)
 
-        df_wl = _safe_df(wl, DISPLAY_COLS + ["confluenta", "persistence_days"])
+        df_wl = _safe_df(wl, DISPLAY_COLS + ["confluenta"])
         st.dataframe(df_wl, width="stretch", height=400)
 
         st.divider()
