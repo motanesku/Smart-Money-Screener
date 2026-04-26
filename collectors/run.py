@@ -1,9 +1,5 @@
 """
-Orchestrator v9 — 4 faze:
-  universe  → duminică 20:00 UTC
-  scan      → 08:00 ET zilnic
-  enrich    → 08:45 ET + 16:30 ET (candidații din scan)
-  watchlist → 16:45 ET zilnic (toți tickerii din watchlist, indiferent de scan)
+Orchestrator v10 — transmite universe la run_scan pentru RS și Sector Heat Score.
 """
 import argparse, sys
 from datetime import datetime
@@ -30,7 +26,8 @@ def run_scan():
     if not universe:
         print("FAIL: Universe gol — rulează universe primul"); sys.exit(1)
     tickers = [u["ticker"] for u in universe]
-    results = do_scan(tickers)
+    # FIX: transmite universe pentru RS și Sector Heat Score
+    results = do_scan(tickers, universe=universe)
     if results:
         save_scan_results(results)
         print(f"OK: {len(results)} candidați")
@@ -39,7 +36,7 @@ def run_scan():
 
 
 def run_enrich():
-    print(f"[{datetime.utcnow().isoformat()}] ENRICH (scan candidates)")
+    print(f"[{datetime.utcnow().isoformat()}] ENRICH")
     from collectors.enricher import enrich_candidates
     from app.db import get_scan_results, save_enriched
     candidates = get_scan_results(days_back=1)
@@ -52,25 +49,16 @@ def run_enrich():
 
 
 def run_watchlist():
-    """
-    Enrich zilnic pentru toți tickerii din watchlist.
-    Independent de scan — include tickeri adăugați manual.
-    Folosește datele din scan dacă tickerul a apărut și acolo.
-    """
     print(f"[{datetime.utcnow().isoformat()}] WATCHLIST ENRICH")
     from collectors.enricher import enrich_watchlist
     from app.db import get_watchlist, get_scan_results, save_enriched
-
     watchlist = get_watchlist()
     if not watchlist:
         print("SKIP: Watchlist gol"); sys.exit(0)
-
     tickers      = [w["ticker"] for w in watchlist]
     scan_results = get_scan_results(days_back=1)
-
-    print(f"Watchlist: {len(tickers)} tickers | Scan results disponibile: {len(scan_results)}")
+    print(f"Watchlist: {len(tickers)} tickers | Scan disponibil: {len(scan_results)}")
     enriched = enrich_watchlist(tickers, scan_results)
-
     if enriched:
         save_enriched(enriched)
         print(f"OK: {len(enriched)} tickers watchlist salvați")

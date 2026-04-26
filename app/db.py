@@ -1,9 +1,10 @@
 """
-DB v9 — modificări:
-- get_ticker_history: limit 30 zile în loc de 10
-- enriched_view cu DISTINCT ON pentru deduplicare
-- fallback robust la tabelă dacă view-ul lipsește
-- insider_sell_value adăugat în save_enriched
+DB v10 — fixes:
+- score_insider NU mai e hardcodat 0 (Bug critic v9)
+- score_insider_quality NU mai e hardcodat 0
+- score_fundamental salvat corect
+- sector_heat_score coloană nouă (pentru Sector Heat Score din scanner)
+- get_sector_stats() pentru heatmap Streamlit
 """
 import os
 from datetime import date, timedelta
@@ -20,7 +21,8 @@ def get_client() -> Client:
 # ── UNIVERSE ──────────────────────────────────────────────────────────────────
 
 def save_universe(tickers: list[dict]):
-    if not tickers: return
+    if not tickers:
+        return
     rows = [{
         "ticker":       (t.get("ticker") or "").upper(),
         "company_name": t.get("company_name") or "",
@@ -42,87 +44,83 @@ def get_universe() -> list[dict]:
 # ── SCAN ──────────────────────────────────────────────────────────────────────
 
 def save_scan_results(results: list[dict]):
-    if not results: return
+    if not results:
+        return
     today = date.today().isoformat()
-    rows  = [{
-        "scan_date":      today,
-        "ticker":         (r.get("ticker") or "").upper(),
-        "price":          r.get("price"),
-        "volume":         int(r.get("volume") or 0),
-        "avg_volume_20d": int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
-        "vol_ratio":      r.get("vol_ratio"),
+    rows = [{
+        "scan_date":          today,
+        "ticker":             (r.get("ticker") or "").upper(),
+        "price":              r.get("price"),
+        "volume":             int(r.get("volume") or 0),
+        "avg_volume_20d":     int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
+        "vol_ratio":          r.get("vol_ratio"),
+        "rs_vs_sector":       r.get("rs_vs_sector"),       # NOU v2
+        "sector_heat_score":  r.get("sector_heat_score"),  # NOU v2
     } for r in results]
     get_client().table("scan_results").upsert(rows, on_conflict="scan_date,ticker").execute()
 
 
 def get_scan_results(days_back: int = 1) -> list[dict]:
     since = (date.today() - timedelta(days=days_back)).isoformat()
-    res   = (get_client().table("scan_results").select("*")
-             .gte("scan_date", since).order("vol_ratio", desc=True).execute())
+    res = (get_client().table("scan_results").select("*")
+           .gte("scan_date", since).order("vol_ratio", desc=True).execute())
     return res.data or []
 
 
 # ── ENRICH ────────────────────────────────────────────────────────────────────
 
 def save_enriched(results: list[dict]):
-    if not results: return
+    if not results:
+        return
     today = date.today().isoformat()
-    rows  = []
+    rows = []
     for r in results:
         rows.append({
-            "enrich_date":            today,
-            "ticker":                 (r.get("ticker") or "").upper(),
-            "company_name":           r.get("company_name") or "",
-            "sector":                 r.get("sector") or "",
-            "industry":               r.get("industry") or "",
-            "market_cap":             int(r.get("market_cap") or 0),
-            "price":                  r.get("price"),
-            "volume":                 int(r.get("volume") or 0),
-            "avg_volume_20d":         int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
-            "vol_ratio":              r.get("vol_ratio"),
-            "insider_buys_90d":       int(r.get("insider_buys_90d") or 0),
-            "insider_buy_value":      float(r.get("insider_buy_value") or 0),
-            "insider_sells_90d":      int(r.get("insider_sells_90d") or 0),
-            "insider_sell_value":     float(r.get("insider_sell_value") or 0),
-            "inst_ownership_pct":     r.get("inst_ownership_pct"),
-            "pe_ratio":               r.get("pe_ratio"),
-            "short_interest_pct":     r.get("short_interest_pct"),
-            "score":                  int(r.get("score") or 0),
-            "market_cap":             int(r.get("market_cap") or 0),
-            "score_volume":           int(r.get("score_volume") or 0),
-            "score_insider":          0,
-            "score_insider_quality":  0,
-            "score_ownership":        int(r.get("score_ownership") or 0),
-            "score_short_interest":   int(r.get("score_short_interest") or 0),
-            "score_short_flow":       int(r.get("score_short_flow") or 0),
-            "score_fundamental":      0,
-            "score_penalty":          0,
-            "volume_signal":          r.get("volume_signal") or "",
-            "insider_signal":         r.get("insider_signal") or "",
-            "short_signal":           r.get("short_signal") or "",
-            "ownership_signal_text":  r.get("ownership_signal") or "",
-            "thesis":                 r.get("thesis") or "",
-            "top_insider_role":       r.get("top_insider_role") or "Unknown",
-            "ownership_form":         r.get("ownership_form") or "",
-            "ownership_holder":       r.get("ownership_holder") or "",
-            "ownership_pct":          r.get("ownership_pct"),
-            "ownership_signal":       r.get("ownership_signal") or "",
-            "short_sale_volume":      int(r.get("short_sale_volume") or 0),
-            "total_volume_reported":  int(r.get("total_volume_reported") or 0),
-            "short_sale_ratio":       r.get("short_sale_ratio"),
-            "short_flow_signal":      r.get("short_flow_signal") or
-                                      r.get("short_flow_signal_text") or "",
-            "beta":                   r.get("beta"),
+            "enrich_date":           today,
+            "ticker":                (r.get("ticker") or "").upper(),
+            "company_name":          r.get("company_name") or "",
+            "sector":                r.get("sector") or "",
+            "industry":              r.get("industry") or "",
+            "market_cap":            int(r.get("market_cap") or 0),
+            "price":                 r.get("price"),
+            "volume":                int(r.get("volume") or 0),
+            "avg_volume_20d":        int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
+            "vol_ratio":             r.get("vol_ratio"),
+            "insider_buys_90d":      int(r.get("insider_buys_90d") or 0),
+            "insider_buy_value":     float(r.get("insider_buy_value") or 0),
+            "insider_sells_90d":     int(r.get("insider_sells_90d") or 0),
+            "insider_sell_value":    float(r.get("insider_sell_value") or 0),
+            "inst_ownership_pct":    r.get("inst_ownership_pct"),
+            "pe_ratio":              r.get("pe_ratio"),
+            "beta":                  r.get("beta"),
+            "short_interest_pct":    r.get("short_interest_pct"),
+            "short_sale_volume":     int(r.get("short_sale_volume") or 0),
+            "total_volume_reported": int(r.get("total_volume_reported") or r.get("volume") or 0),
+            "short_sale_ratio":      r.get("short_sale_ratio"),
+            "short_flow_signal":     r.get("short_flow_signal") or "",
+            "short_signal":          r.get("short_signal") or "",
+            "ownership_form":        r.get("ownership_form") or "",
+            "ownership_holder":      r.get("ownership_holder") or "",
+            "ownership_pct":         r.get("ownership_pct"),
+            "ownership_signal":      r.get("ownership_signal") or "",
+            "ownership_signal_text": r.get("ownership_signal_text") or "",
+            # ── Scoruri — FIX: toate luate din enricher, niciuna hardcodată ──
+            "score":                 int(r.get("score") or 0),
+            "score_volume":          int(r.get("score_volume") or 0),
+            "score_insider":         int(r.get("score_insider") or 0),          # FIX
+            "score_insider_quality": int(r.get("score_insider_quality") or 0),  # FIX
+            "score_ownership":       int(r.get("score_ownership") or 0),
+            "score_short_interest":  int(r.get("score_short_interest") or 0),
+            "score_short_flow":      int(r.get("score_short_flow") or 0),
+            "score_fundamental":     int(r.get("score_fundamental") or 0),      # FIX
+            "score_penalty":         int(r.get("score_penalty") or 0),
+            # ── Semnale ──
+            "volume_signal":         r.get("volume_signal") or "",
+            "insider_signal":        r.get("insider_signal") or "",
+            "thesis":                r.get("thesis") or "",
+            "top_insider_role":      r.get("top_insider_role") or "Unknown",
         })
     get_client().table("enriched").upsert(rows, on_conflict="enrich_date,ticker").execute()
-
-
-def _query_enriched(table: str, query_fn) -> list[dict]:
-    try:
-        res = query_fn(get_client().table(table))
-        return res.data or []
-    except Exception:
-        return []
 
 
 def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:
@@ -135,12 +133,12 @@ def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:
                    .order("score", desc=True)
                    .execute())
             if res.data:
-                # Deduplicare client-side ca safety net
                 seen, out = set(), []
                 for row in res.data:
                     t = row["ticker"]
                     if t not in seen:
-                        seen.add(t); out.append(row)
+                        seen.add(t)
+                        out.append(row)
                 return out
         except Exception:
             continue
@@ -148,7 +146,6 @@ def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:
 
 
 def get_ticker_history(ticker: str, limit: int = 30) -> list[dict]:
-    """Istoric 30 de zile pentru un ticker — pentru grafice și trending."""
     for table in ["enriched_view", "enriched"]:
         try:
             res = (get_client().table(table).select("*")
@@ -158,11 +155,78 @@ def get_ticker_history(ticker: str, limit: int = 30) -> list[dict]:
                    .execute())
             rows = res.data or []
             if rows:
-                rows.reverse()  # cronologic
+                rows.reverse()
                 return rows
         except Exception:
             continue
     return []
+
+
+# ── SECTOR STATS (NOU v2) ─────────────────────────────────────────────────────
+
+def get_sector_stats(days_back: int = 1) -> list[dict]:
+    """
+    Agregare sector → count tickers activi + avg vol_ratio + avg score.
+    Folosit de heatmap-ul din Streamlit.
+    """
+    since = (date.today() - timedelta(days=days_back)).isoformat()
+    try:
+        res = (get_client().table("enriched")
+               .select("sector,score,vol_ratio")
+               .gte("enrich_date", since)
+               .neq("sector", "")
+               .execute())
+        rows = res.data or []
+        if not rows:
+            return []
+        from collections import defaultdict
+        agg = defaultdict(lambda: {"count": 0, "score_sum": 0.0, "vol_sum": 0.0})
+        for r in rows:
+            s = r.get("sector") or "Unknown"
+            agg[s]["count"]     += 1
+            agg[s]["score_sum"] += float(r.get("score") or 0)
+            agg[s]["vol_sum"]   += float(r.get("vol_ratio") or 0)
+        return [
+            {
+                "sector":    sector,
+                "count":     v["count"],
+                "avg_score": round(v["score_sum"] / v["count"], 1),
+                "avg_vol":   round(v["vol_sum"] / v["count"], 2),
+                "in_play":   v["count"] >= 5,   # arhitectura: 5+ = "In Play"
+            }
+            for sector, v in sorted(agg.items(), key=lambda x: -x[1]["count"])
+        ]
+    except Exception as e:
+        print(f"[sector_stats] eroare: {e}")
+        return []
+
+
+# ── PERSISTENCE (NOU v2) ──────────────────────────────────────────────────────
+
+def get_persistence_stats(days_back: int = 21) -> list[dict]:
+    """
+    Câte zile a apărut fiecare ticker în scan în ultimele N zile.
+    Whale footprint: apariții multiple = acumulare persistentă.
+    """
+    since = (date.today() - timedelta(days=days_back)).isoformat()
+    try:
+        res = (get_client().table("scan_results")
+               .select("ticker,scan_date")
+               .gte("scan_date", since)
+               .execute())
+        rows = res.data or []
+        from collections import defaultdict
+        count = defaultdict(set)
+        for r in rows:
+            count[r["ticker"]].add(r["scan_date"])
+        return [
+            {"ticker": t, "appearance_days": len(dates)}
+            for t, dates in sorted(count.items(), key=lambda x: -len(x[1]))
+            if len(dates) >= 2  # minim 2 apariții pentru a fi relevant
+        ]
+    except Exception as e:
+        print(f"[persistence] eroare: {e}")
+        return []
 
 
 # ── WATCHLIST ─────────────────────────────────────────────────────────────────
@@ -186,7 +250,8 @@ def remove_from_watchlist(ticker: str):
 
 def get_watchlist_enriched() -> list[dict]:
     watchlist = get_watchlist()
-    if not watchlist: return []
+    if not watchlist:
+        return []
     tickers = [w["ticker"] for w in watchlist]
     for table in ["enriched_view", "enriched"]:
         try:
@@ -200,7 +265,8 @@ def get_watchlist_enriched() -> list[dict]:
                 for row in rows:
                     t = row["ticker"]
                     if t not in seen:
-                        seen.add(t); result.append(row)
+                        seen.add(t)
+                        result.append(row)
                 return result
         except Exception:
             continue
