@@ -98,7 +98,7 @@ def _render_detail_row(row: dict, key_suffix: str):
     icon      = _dir_icon(direction)
     conf      = _confluence(row)
 
-    label = f"{icon} {ticker}  |  {company}  |  Score: {score}  |  {conf}"
+    label = f"{ticker}  |  {company}  |  Score: {score}  {icon}  {conf}".strip(" |")
     with st.expander(label, expanded=False):
 
         m1, m2, m3, m4, m5, m6 = st.columns(6)
