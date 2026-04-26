@@ -1,17 +1,17 @@
 """
-Enricher v11 — FMP Profile + SEC EDGAR + Persistence Scoring.
+Enricher v11 — FULL CODE
+Combină FMP Profile, SEC Insider Data și Persistence Scoring.
 """
 import os, sys, time
 from datetime import date, timedelta
 import requests
 import yfinance as yf
-from app.db import get_client # Pentru check persistență
+from app.db import get_client
 
 FMP_KEY  = os.environ.get("FMP_KEY", "")
 FMP_BASE = "https://financialmodelingprep.com/stable"
 
 def get_profile(ticker: str) -> dict:
-    """FMP /stable/profile — singurul endpoint FMP folosit."""
     try:
         r = requests.get(f"{FMP_BASE}/profile",
                          params={"symbol": ticker, "apikey": FMP_KEY}, timeout=20)
@@ -27,23 +27,22 @@ def get_profile(ticker: str) -> dict:
     except: return {}
 
 def get_persistence_count(ticker: str) -> int:
-    """Verifică de câte ori a apărut tickerul în scanner în ultimele 14 zile."""
+    """Verifică istoricul din view-ul SQL v_persistence_signals."""
     try:
         res = get_client().table("v_persistence_signals").select("appearance_count").eq("ticker", ticker.upper()).execute()
         return res.data[0]["appearance_count"] if res.data else 0
     except: return 0
 
 def calculate_smart_money_score(data, p_count):
-    """Scoring v2: Insider (40p) + Persistență (30p) + Volum (30p)."""
     score = 0
-    # Insider Score (bazat pe datele tale din EDGAR/FMP)
+    # 1. Insider Score (din datele colectate anterior)
     score += data.get('score_insider', 0)
     
-    # Persistence Score (NOU)
+    # 2. Persistence Score (0-30p)
     if p_count >= 3: score += 30
     elif p_count >= 2: score += 15
     
-    # Vol Ratio Bonus
+    # 3. Vol Ratio Bonus (0-30p)
     vr = data.get('vol_ratio', 0)
     if vr > 5: score += 30
     elif vr > 2: score += 15
@@ -54,30 +53,32 @@ def enrich_single(ticker, scan_data=None):
     ticker = ticker.upper()
     profile = get_profile(ticker)
     
-    # Aici ar veni apelul tău la edgar.py pentru insider data
-    # (Presupunem că aduci datele din edgar.get_insider_data_edgar)
+    # Importă logica de insider din edgar.py-ul tău
+    from collectors.edgar import get_insider_data_edgar
+    insider = get_insider_data_edgar(ticker)
     
     p_count = get_persistence_count(ticker)
     
-    enriched = {
+    data = {
         "ticker": ticker,
         "enrich_date": date.today().isoformat(),
         "company_name": profile.get("company_name"),
         "sector": profile.get("sector"),
+        "industry": profile.get("industry"),
         "vol_ratio": scan_data.get("vol_ratio", 0) if scan_data else 0,
-        "score_insider": 0, # Placeholder pt datele din EDGAR
-        "score": 0
+        "score_insider": insider.get("buys", 0) * 10, # Logica ta de scor insider
+        "top_insider_role": insider.get("top_role", "")
     }
     
-    enriched["score"] = calculate_smart_money_score(enriched, p_count)
-    return enriched
+    data["score"] = calculate_smart_money_score(data, p_count)
+    return data
 
 def enrich_candidates(candidates: list[dict]) -> list[dict]:
     results = []
     for c in candidates:
         res = enrich_single(c['ticker'], scan_data=c)
         if res: results.append(res)
-        time.sleep(0.2) # Politete API
+        time.sleep(0.2)
     return results
 
 if __name__ == "__main__":
