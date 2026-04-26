@@ -101,13 +101,17 @@ def _render_detail_row(row: dict, key_suffix: str):
     label = f"{ticker}  |  {company}  |  Score: {score}  {icon}  {conf}".strip(" |")
     with st.expander(label, expanded=False):
 
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        dte = row.get("days_to_earnings")
+        dte_str = f"⚡ {dte}z" if dte is not None and dte <= 14 else (f"{dte}z" if dte else "—")
+
+        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
         m1.metric("Score",       score)
         m2.metric("Vol Ratio",   f"{row.get('vol_ratio',0):.1f}x")
-        m3.metric("P/C Ratio",   f"{row.get('pc_ratio','N/A')}")
+        m3.metric("P/C Ratio",   f"{row.get('pc_ratio') or '—'}")
         m4.metric("Persistență", f"{row.get('persistence_days',0)}d/21d")
-        m5.metric("Short Ratio", f"{row.get('short_sale_ratio') or row.get('short_float_pct') or 'N/A'}")
-        m6.metric("Inst. Own",   f"{row.get('inst_own_pct') or 'N/A'}")
+        m5.metric("Short Ratio", f"{row.get('short_sale_ratio') or row.get('short_float_pct') or '—'}")
+        m6.metric("Inst. Own",   f"{row.get('inst_own_pct') or '—'}")
+        m7.metric("Earnings",    dte_str)
 
         st.markdown(f"**Thesis:** {row.get('thesis','')}")
         st.markdown(

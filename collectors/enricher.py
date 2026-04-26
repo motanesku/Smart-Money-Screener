@@ -28,7 +28,7 @@ INSIDER — context pur:
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 
 import yfinance as yf
 
@@ -113,6 +113,18 @@ def get_sideways_score(ticker: str) -> tuple[int, str]:
 
 
 # ── Score helpers ─────────────────────────────────────────────────────────────
+
+def _days_to_earnings(earnings_ts) -> int | None:
+    """Câte zile până la următorul earnings. None dacă data nu e disponibilă."""
+    if not earnings_ts:
+        return None
+    try:
+        earn_dt = datetime.fromtimestamp(int(earnings_ts), tz=timezone.utc)
+        delta   = (earn_dt.date() - date.today()).days
+        return delta if delta >= 0 else None  # trecut = ignorăm
+    except Exception:
+        return None
+
 
 def _score_volume(vol_ratio: float, vol_usd: float = 0.0) -> tuple[int, str]:
     """
@@ -309,9 +321,17 @@ def enrich_single(ticker: str, scan_data: dict | None = None) -> dict:
     vol_usd = float(price) * volume if price and volume else 0.0
 
     # ── Scoruri (insider scos) ─────────────────────────────────────────────
+    days_to_earn = _days_to_earnings(profile.get("earnings_ts"))
+
     s_vol,     sig_vol   = _score_volume(vol_ratio, vol_usd)
     s_options, sig_opts  = score_options(opts)
     s_short,   sig_short = _score_short(short, vol_ratio)
+
+    # Bonus earnings proximity: options flow neobișnuit cu <10 zile înainte
+    # de earnings e mult mai semnificativ (asimetrie informațională)
+    if days_to_earn is not None and 1 <= days_to_earn <= 10 and s_options >= 20:
+        s_options = min(s_options + 8, 30)
+        sig_opts  = f"{sig_opts}+EARNINGS_PROXIMITY"
 
     raw_score   = s_vol + s_options + s_short + s_sideways
     total_score = max(0, min(raw_score, 100))
@@ -327,10 +347,13 @@ def enrich_single(ticker: str, scan_data: dict | None = None) -> dict:
         thesis_parts.append(f"Vol {vol_ratio:.1f}x {usd_str}".strip())
     if p_count >= 3:
         thesis_parts.append(f"Persistent {p_count}d/21d")
+    if days_to_earn is not None and days_to_earn <= 10:
+        thesis_parts.append(f"⚡ Earnings în {days_to_earn}z")
     if opts.get("options_signal") in ("UNUSUAL_CALL_SWEEP", "UNUSUAL_CALL_BUYING"):
         pc = opts.get("pc_ratio")
         pc_str = f" P/C={pc:.2f}" if pc else ""
-        thesis_parts.append(f"Call sweep{pc_str}")
+        earn_note = f" [{days_to_earn}z earnings]" if days_to_earn and days_to_earn <= 10 else ""
+        thesis_parts.append(f"Call sweep{pc_str}{earn_note}")
     if opts.get("options_signal") in ("UNUSUAL_PUT_SWEEP", "UNUSUAL_PUT_BUYING"):
         thesis_parts.append(f"Put sweep ⚠️ P/C={opts.get('pc_ratio','?')}")
     if short.get("squeeze_setup"):
@@ -431,6 +454,9 @@ def enrich_single(ticker: str, scan_data: dict | None = None) -> dict:
         "ownership_signal":      "",
         "ownership_signal_text": "",
         "inst_ownership_pct":    profile.get("inst_own_pct"),
+
+        # Earnings context
+        "days_to_earnings":    days_to_earn,
 
         # folosit în get_ai_thesis
         "persistence_days_calc": p_count,
