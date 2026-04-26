@@ -1,90 +1,36 @@
-"""
-Scanner v11 — FULL CODE
-Detectează volume spikes și pregătește datele pentru Relative Strength.
-"""
-import sys
-import yfinance as yf
+import sys, os
+sys.path.insert(0, ".")
 import pandas as pd
+import streamlit as st
+from app.db import get_enriched, get_watchlist_enriched, remove_from_watchlist
 
-MIN_VOL_RATIO = 2.0
-MIN_PRICE     = 5.0
-TOP_N         = 50
+st.set_page_config(page_title="Smart Money Screener", layout="wide")
 
-# Mapare ETF-uri pentru rotație sectorială
-SECTOR_ETFS = {
-    "Energy": "XLE", "Technology": "XLK", "Financials": "XLF",
-    "Health Care": "XLV", "Consumer Defensive": "XLP", "Utilities": "XLU",
-    "Communication Services": "XLC", "Industrials": "XLI", "Basic Materials": "XLB",
-    "Real Estate": "XLRE", "Consumer Cyclical": "XLY"
-}
+# UI Styling
+ACCENT = "#0969da"
+st.markdown(f"""<style> @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono&display=swap');
+    html, body, [class*="st-"] {{ font-family: 'IBM Plex Mono', monospace; }} </style>""", unsafe_allow_html=True)
 
-def run_scan(tickers: list[str]) -> list[dict]:
-    if not tickers:
-        print("EROARE: Lista tickers goală")
-        return []
+st.title("📡 Smart Money Screener")
 
-    print(f"Scan pentru {len(tickers)} tickers + Sector Analysis...")
+def show_narrative(df):
+    if not df.empty and 'sector' in df.columns:
+        st.subheader("🌊 Market Narrative")
+        heat = df.groupby('sector').size().reset_index(name='Count').sort_values('Count', ascending=False)
+        c1, c2 = st.columns([1, 2])
+        with c1: st.dataframe(heat, hide_index=True)
+        with c2: st.bar_chart(data=heat, x='sector', y='Count', color=ACCENT)
 
-    # 1. Download Bulk Tickers (Logica ta originală)
-    raw = yf.download(
-        tickers=tickers,
-        period="25d",
-        interval="1d",
-        group_by="ticker",
-        auto_adjust=True,
-        threads=True,
-        progress=False,
-    )
-    
-    candidates = []
-    for ticker in tickers:
-        try:
-            hist = raw[ticker] if len(tickers) > 1 else raw
-            if hist is None or len(hist) < 5:
-                continue
-            hist = hist.dropna(subset=["Volume", "Close"])
-            if len(hist) < 5:
-                continue
+tabs = st.tabs(["🚀 Candidates", "⭐ Watchlist"])
 
-            price      = float(hist["Close"].iloc[-1])
-            prev_price = float(hist["Close"].iloc[-2])
-            vol_today  = float(hist["Volume"].iloc[-1])
-            
-            if price < MIN_PRICE or vol_today == 0:
-                continue
+with tabs[0]:
+    data = get_enriched()
+    if data:
+        df = pd.DataFrame(data)
+        st.dataframe(df, use_container_width=True)
+        show_narrative(df)
 
-            avg_vol = float(hist["Volume"].iloc[:-1].tail(20).mean())
-            if avg_vol < 10_000:
-                continue
-
-            vol_ratio = vol_today / avg_vol
-            if vol_ratio >= MIN_VOL_RATIO:
-                # Calcul performanță ticker pentru Relative Strength
-                perf_ticker = (price / prev_price) - 1
-                
-                candidates.append({
-                    "ticker":         ticker,
-                    "price":          round(price, 2),
-                    "volume":         int(vol_today),
-                    "avg_volume_20d": int(avg_vol),
-                    "vol_ratio":      round(vol_ratio, 2),
-                    "raw_perf":       perf_ticker 
-                })
-        except Exception:
-            continue
-
-    candidates.sort(key=lambda x: x["vol_ratio"], reverse=True)
-    result = candidates[:TOP_N]
-    print(f"Găsiți {len(result)} candidați.")
-    return result
-
-if __name__ == "__main__":
-    sys.path.insert(0, ".")
-    from app.db import get_universe, save_scan_results
-    universe = get_universe()
-    if not universe:
-        sys.exit(1)
-    tickers_list = [u['ticker'] for u in universe]
-    results = run_scan(tickers_list)
-    if results:
-        save_scan_results(results)
+with tabs[1]:
+    wl = get_watchlist_enriched()
+    if wl:
+        st.dataframe(pd.DataFrame(wl), use_container_width=True)
