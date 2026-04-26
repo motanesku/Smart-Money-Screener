@@ -1,3 +1,7 @@
+"""
+Scanner v11 — Detectează volume spikes și calculează Relative Strength față de Sector.
+Integrat cu logica originală de yfinance bulk download.
+"""
 import sys
 import yfinance as yf
 import pandas as pd
@@ -19,7 +23,7 @@ def run_scan(tickers: list[str]) -> list[dict]:
         print("EROARE: Lista tickers goală")
         return []
 
-    print(f"📡 Scan v2: Analiză {len(tickers)} tickers + Sectoare...")
+    print(f"Scan pentru {len(tickers)} tickers + Sector Analysis...")
 
     # 1. Download Bulk Tickers (Logica ta originală)
     raw = yf.download(
@@ -59,7 +63,7 @@ def run_scan(tickers: list[str]) -> list[dict]:
 
             vol_ratio = vol_today / avg_vol
             if vol_ratio >= MIN_VOL_RATIO:
-                # Calcul performanță ticker (folosit ulterior pentru RS)
+                # Calcul performanță ticker (pentru Relative Strength în enricher)
                 perf_ticker = (price / prev_price) - 1
                 
                 candidates.append({
@@ -75,7 +79,7 @@ def run_scan(tickers: list[str]) -> list[dict]:
 
     candidates.sort(key=lambda x: x["vol_ratio"], reverse=True)
     result = candidates[:TOP_N]
-    print(f"Găsiți {len(result)} candidați.")
+    print(f"Găsiți {len(result)} candidați (vol_ratio >= {MIN_VOL_RATIO}x)")
     return result
 
 if __name__ == "__main__":
@@ -83,6 +87,7 @@ if __name__ == "__main__":
     from app.db import get_universe, save_scan_results
     universe = get_universe()
     if not universe:
+        print("EROARE: Universe gol")
         sys.exit(1)
     tickers_list = [u['ticker'] for u in universe]
     results = run_scan(tickers_list)
