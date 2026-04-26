@@ -172,6 +172,41 @@ def _get_filing_xml_url(cik: str, accession: str) -> str | None:
     return None
 
 
+def _find_xml_in_index(cik_int: str, acc_clean: str) -> str | None:
+    """
+    Fallback: citește index-ul JSON al unui filing și returnează URL-ul
+    primului fișier XML care nu e un index sau stylesheet.
+    Folosit când primaryDocument lipsește sau nu e XML.
+    """
+    try:
+        time.sleep(0.1)
+        index_url = (
+            f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}/"
+            f"{acc_clean}-index.json"
+        )
+        r = requests.get(index_url, headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        docs = r.json().get("documents", [])
+        for doc in docs:
+            name = doc.get("document", "")
+            dtype = (doc.get("type") or "").upper()
+            # Vrem Form 4 XML, nu index sau stylesheet
+            if name.lower().endswith(".xml") and "4" in dtype:
+                return (
+                    f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}/{name}"
+                )
+        # Dacă nu am găsit după tip, luăm primul XML care nu e index
+        for doc in docs:
+            name = doc.get("document", "")
+            if name.lower().endswith(".xml") and "index" not in name.lower():
+                return (
+                    f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}/{name}"
+                )
+    except Exception:
+        pass
+    return None
+
+
 def get_insider_data_edgar(ticker: str, days_back: int = 90) -> dict:
     """
     Citește Form 4 filings din SEC EDGAR și parsează REAL buy vs sell.
@@ -207,10 +242,11 @@ def get_insider_data_edgar(ticker: str, days_back: int = 90) -> dict:
         body    = r.json()
         filings = body.get("filings", {}).get("recent", {})
 
-        forms      = filings.get("form", [])
-        dates      = filings.get("filingDate", [])
-        accessions = filings.get("accessionNumber", [])
-        cutoff     = (date.today() - timedelta(days=days_back)).isoformat()
+        forms         = filings.get("form", [])
+        dates         = filings.get("filingDate", [])
+        accessions    = filings.get("accessionNumber", [])
+        primary_docs  = filings.get("primaryDocument", [])  # numele real al fișierului XML
+        cutoff        = (date.today() - timedelta(days=days_back)).isoformat()
 
         total_buys  = 0
         total_sells = 0
@@ -220,9 +256,12 @@ def get_insider_data_edgar(ticker: str, days_back: int = 90) -> dict:
         best_role_score  = 0
         is_10b5          = False
         parsed_count     = 0
-        MAX_PARSE        = 15  # parsăm max 15 filing-uri pentru a nu depăși rate limit
+        MAX_PARSE        = 15
 
-        for form, f_date, accession in zip(forms, dates, accessions):
+        for form, f_date, accession, primary_doc in zip(
+            forms, dates, accessions,
+            primary_docs if primary_docs else [""] * len(forms),
+        ):
             if f_date < cutoff:
                 break
             if form != "4":
@@ -230,14 +269,17 @@ def get_insider_data_edgar(ticker: str, days_back: int = 90) -> dict:
             if parsed_count >= MAX_PARSE:
                 break
 
-            # Construim URL direct fără a naviga index-ul (mai rapid)
-            acc_clean  = accession.replace("-", "")
-            cik_int    = str(int(cik))
-            filing_dir = (
-                f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}/"
-            )
-            # Fișierul XML principal are de obicei același nume ca accession
-            xml_url = f"{filing_dir}{acc_clean}.xml"
+            acc_clean = accession.replace("-", "")
+            cik_int   = str(int(cik))
+            base_url  = f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}"
+
+            # primaryDocument = numele real al fișierului (ex: "wf-form4_xxxx.xml")
+            # Fallback: încearcă să găsim XML-ul din index dacă primaryDocument lipsește
+            if primary_doc and primary_doc.lower().endswith(".xml"):
+                xml_url = f"{base_url}/{primary_doc}"
+            else:
+                # Citim index-ul JSON al filing-ului pentru a afla fișierul XML
+                xml_url = _find_xml_in_index(cik_int, acc_clean) or f"{base_url}/{acc_clean}.xml"
 
             parsed = _parse_form4_xml(xml_url)
             parsed_count += 1

@@ -164,9 +164,16 @@ with tabs[0]:
 
     all_data = get_enriched(days_back=days_back, min_score=min_score)
 
+    if all_data:
+        dir_counts = {}
+        for r in all_data:
+            d = r.get("direction") or "NULL/lipsă"
+            dir_counts[d] = dir_counts.get(d, 0) + 1
+        st.caption(f"DB: {len(all_data)} tickers total | Direcții: {dir_counts}")
+
     bull_data = [
         r for r in all_data
-        if r.get("direction") in (["BULLISH"] + (["NEUTRAL"] if show_neut else []))
+        if r.get("direction", "NEUTRAL") in (["BULLISH"] + (["NEUTRAL"] if show_neut else []))
     ]
 
     for r in bull_data:

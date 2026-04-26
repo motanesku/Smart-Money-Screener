@@ -164,7 +164,32 @@ def save_enriched(results: list[dict]):
             # AI Analysis
             "ai_thesis_ro":          r.get("ai_thesis_ro") or "",
         })
-    get_client().table("enriched").upsert(rows, on_conflict="enrich_date,ticker").execute()
+    try:
+        get_client().table("enriched").upsert(rows, on_conflict="enrich_date,ticker").execute()
+    except Exception as e:
+        # Fallback: coloane noi din migration_v6/v7 nu există încă în Supabase.
+        # Salvăm doar coloanele sigure (schema v5) și avertizăm utilizatorul.
+        print(f"  [DB] save_enriched full upsert eșuat: {e}")
+        print("  [DB] Fallback: salvăm fără coloanele v6/v7. Rulează migration_v7 în Supabase!")
+        V5_COLS = {
+            "enrich_date","ticker","company_name","sector","industry","market_cap",
+            "price","volume","avg_volume_20d","vol_ratio","rs_vs_sector","sector_heat_score",
+            "insider_buys_90d","insider_buy_value","insider_sells_90d","insider_sell_value",
+            "top_insider_role","net_insider_signal","is_10b5_plan",
+            "inst_ownership_pct","short_interest_pct","short_sale_volume",
+            "total_volume_reported","short_sale_ratio","avg_short_ratio_5d",
+            "squeeze_setup","short_flow_signal","short_signal","short_squeeze_signal",
+            "sideways_signal","pe_ratio","beta",
+            "score","score_volume","score_insider","score_insider_quality",
+            "score_ownership","score_short_interest","score_short_flow",
+            "score_fundamental","score_penalty",
+            "volume_signal","insider_signal","thesis","ai_thesis_ro",
+        }
+        fallback_rows = [{k: v for k, v in row.items() if k in V5_COLS} for row in rows]
+        get_client().table("enriched").upsert(
+            fallback_rows, on_conflict="enrich_date,ticker"
+        ).execute()
+        print(f"  [DB] Fallback salvat {len(fallback_rows)} rows (schema v5).")
 
 
 def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:

@@ -42,7 +42,19 @@ def run_enrich():
     candidates = get_scan_results(days_back=1)
     if not candidates:
         print("SKIP: Niciun candidat de enriched"); sys.exit(0)
-    enriched = enrich_candidates(candidates)
+
+    # Deduplicare: același ticker poate apărea de 2 ori dacă scan-ul a rulat
+    # atât ieri cât și azi. Păstrăm cel mai recent (cel mai mare vol_ratio).
+    seen: dict[str, dict] = {}
+    for c in candidates:
+        t = (c.get("ticker") or "").upper()
+        if t not in seen or (c.get("vol_ratio") or 0) > (seen[t].get("vol_ratio") or 0):
+            seen[t] = c
+    unique_candidates = list(seen.values())
+    if len(unique_candidates) < len(candidates):
+        print(f"  Dedup: {len(candidates)} → {len(unique_candidates)} candidați unici")
+
+    enriched = enrich_candidates(unique_candidates)
     if enriched:
         save_enriched(enriched)
         print(f"OK: {len(enriched)} tickers salvați")
