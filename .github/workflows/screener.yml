@@ -15,7 +15,7 @@ on:
         required: true
         default: 'watchlist'
         type: choice
-        options: [universe, scan, enrich, watchlist]
+        options: [universe, scan, enrich, watchlist, all]
 
 jobs:
   run-screener:

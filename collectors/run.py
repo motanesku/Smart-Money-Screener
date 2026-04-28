@@ -85,10 +85,16 @@ PHASES = {
     "watchlist": run_watchlist,
 }
 
+ALL_PHASES = ["universe", "scan", "enrich", "watchlist"]
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=list(PHASES.keys()), required=True)
+    parser.add_argument("--phase", choices=list(PHASES.keys()) + ["all"], required=True)
     args = parser.parse_args()
-    print(f"=== Smart Money Screener | {args.phase.upper()} ===")
-    PHASES[args.phase]()
-    print("=== DONE ===")
+
+    phases_to_run = ALL_PHASES if args.phase == "all" else [args.phase]
+    for phase in phases_to_run:
+        print(f"=== Smart Money Screener | {phase.upper()} ===")
+        PHASES[phase]()
+        print(f"=== {phase.upper()} DONE ===\n")
+    print("=== ALL DONE ===")
