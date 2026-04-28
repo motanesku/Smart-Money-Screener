@@ -199,6 +199,7 @@ def get_enriched(days_back: int = 1, min_score: int = 0) -> list[dict]:
             res = (get_client().table(table).select("*")
                    .gte("enrich_date", since)
                    .gte("score", min_score)
+                   .order("enrich_date", desc=True)
                    .order("score", desc=True)
                    .execute())
             if res.data:
