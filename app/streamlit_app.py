@@ -190,7 +190,7 @@ with tabs[0]:
         st.info("Niciun setup bullish găsit. Rulează `python collectors/run.py --phase enrich`")
     else:
         df_bull = _safe_df(bull_data, BULL_COLS + ["confluenta", "direction"])
-        st.dataframe(df_bull.reset_index(drop=True), use_container_width=True, height=380)
+        st.dataframe(df_bull.reset_index(drop=True), width='stretch', height=380)
 
         n_bull = sum(1 for r in bull_data if r.get("direction") == "BULLISH")
         n_sq   = sum(1 for r in bull_data if r.get("squeeze_setup"))
@@ -246,7 +246,7 @@ with tabs[1]:
         df_bear = _safe_df(bear_data, BEAR_COLS + ["direction"])
         st.dataframe(
             df_bear.reset_index(drop=True),
-            use_container_width=True,
+            width='stretch',
             height=350,
         )
 
@@ -291,7 +291,7 @@ with tabs[2]:
         st.divider()
         st.dataframe(
             df_sec.style.highlight_max(subset=["count", "avg_score", "avg_vol"], color="#0f5132"),
-            use_container_width=True,
+            width='stretch',
         )
         st.bar_chart(df_sec.set_index("sector")["count"])
 
@@ -313,11 +313,11 @@ with tabs[3]:
         whales = df_p[df_p["appearance_days"] >= 5]
         if not whales.empty:
             st.markdown(f"### 🐳 Whale Suspects ({len(whales)} tickers, 5+ zile)")
-            st.dataframe(whales, use_container_width=True, height=200)
+            st.dataframe(whales, width='stretch', height=200)
             st.divider()
 
         st.markdown("### Toate apariții (2+ zile)")
-        st.dataframe(df_p, use_container_width=True, height=320)
+        st.dataframe(df_p, width='stretch', height=320)
         st.bar_chart(df_p.head(15).set_index("ticker")["appearance_days"])
 
 
@@ -337,7 +337,7 @@ with tabs[4]:
 
         wl_cols = ["ticker", "company_name_display", "sector", "price", "direction",
                    "vol_ratio", "options_signal", "score", "thesis"]
-        st.dataframe(_safe_df(wl, wl_cols + ["confluenta"]), use_container_width=True, height=320)
+        st.dataframe(_safe_df(wl, wl_cols + ["confluenta"]), width='stretch', height=320)
 
         st.divider()
         st.subheader("Analiză Detaliată Watchlist")
