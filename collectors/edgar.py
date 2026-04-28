@@ -24,7 +24,8 @@ from datetime import date, timedelta
 
 import requests
 
-EDGAR_BASE = "https://data.sec.gov"
+EDGAR_BASE     = "https://data.sec.gov"   # submissions API
+EDGAR_ARCHIVES = "https://www.sec.gov"    # file archives
 HEADERS    = {"User-Agent": "SmartMoneyScreener research@screener.com"}
 
 # transactionCode P = open market purchase, S = open market sale
@@ -153,10 +154,10 @@ def _get_filing_xml_url(cik: str, accession: str) -> str | None:
     Accession format: 0001234567-24-000123 → 000123456724000123
     """
     acc_clean = accession.replace("-", "")
-    index_url = f"{EDGAR_BASE}/Archives/edgar/full-index/{acc_clean[:4]}/{acc_clean[4:6]}"
+    index_url = f"{EDGAR_ARCHIVES}/Archives/edgar/full-index/{acc_clean[:4]}/{acc_clean[4:6]}"
     # Metoda directă: construim URL-ul din submission index
     filing_url = (
-        f"{EDGAR_BASE}/Archives/edgar/data/{int(cik)}/"
+        f"{EDGAR_ARCHIVES}/Archives/edgar/data/{int(cik)}/"
         f"{acc_clean}/"
     )
     try:
@@ -181,7 +182,7 @@ def _find_xml_in_index(cik_int: str, acc_clean: str) -> str | None:
     try:
         time.sleep(0.1)
         index_url = (
-            f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}/"
+            f"{EDGAR_ARCHIVES}/Archives/edgar/data/{cik_int}/{acc_clean}/"
             f"{acc_clean}-index.json"
         )
         r = requests.get(index_url, headers=HEADERS, timeout=10)
@@ -193,14 +194,14 @@ def _find_xml_in_index(cik_int: str, acc_clean: str) -> str | None:
             # Vrem Form 4 XML, nu index sau stylesheet
             if name.lower().endswith(".xml") and "4" in dtype:
                 return (
-                    f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}/{name}"
+                    f"{EDGAR_ARCHIVES}/Archives/edgar/data/{cik_int}/{acc_clean}/{name}"
                 )
         # Dacă nu am găsit după tip, luăm primul XML care nu e index
         for doc in docs:
             name = doc.get("document", "")
             if name.lower().endswith(".xml") and "index" not in name.lower():
                 return (
-                    f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}/{name}"
+                    f"{EDGAR_ARCHIVES}/Archives/edgar/data/{cik_int}/{acc_clean}/{name}"
                 )
     except Exception:
         pass
@@ -271,17 +272,14 @@ def get_insider_data_edgar(ticker: str, days_back: int = 90) -> dict:
 
             acc_clean = accession.replace("-", "")
             cik_int   = str(int(cik))
-            base_url  = f"{EDGAR_BASE}/Archives/edgar/data/{cik_int}/{acc_clean}"
+            base_url  = f"{EDGAR_ARCHIVES}/Archives/edgar/data/{cik_int}/{acc_clean}"
 
-            # Citim index-ul JSON al filing-ului — metodă sigură indiferent de primaryDocument
-            xml_url = _find_xml_in_index(cik_int, acc_clean)
-            if not xml_url:
-                # Fallback la primaryDocument (strip prefix xslF345X0X/ dacă există)
-                clean_doc = primary_doc.split("/")[-1] if primary_doc else ""
-                if clean_doc.lower().endswith(".xml"):
-                    xml_url = f"{base_url}/{clean_doc}"
-                else:
-                    xml_url = f"{base_url}/{acc_clean}.xml"
+            # Strip prefix xslF345X0X/ din primaryDocument (EDGAR viewer path, nu real)
+            clean_doc = primary_doc.split("/")[-1] if primary_doc else ""
+            if clean_doc.lower().endswith(".xml"):
+                xml_url = f"{base_url}/{clean_doc}"
+            else:
+                xml_url = f"{base_url}/{acc_clean}.xml"
 
             parsed = _parse_form4_xml(xml_url)
             parsed_count += 1

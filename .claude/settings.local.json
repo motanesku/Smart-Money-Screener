@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Read(//c/Users/danut/Downloads/**)",
-      "Bash(unzip -o \"logs_66597984894\\(1\\).zip\" -d logs_extracted_66597984894)"
+      "Bash(unzip -o \"logs_66597984894\\(1\\).zip\" -d logs_extracted_66597984894)",
+      "Bash(curl -s \"https://data.sec.gov/Archives/edgar/data/2488/000000248826000066/wk-form4_1776456710.xml\" -H \"User-Agent: SmartMoneyScreener contact@example.com\")",
+      "Bash(curl *)",
+      "Bash(python3 -c ' *)"
     ]
   }
 }
