@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/danut/Downloads/**)",
+      "Bash(unzip -o \"logs_66597984894\\(1\\).zip\" -d logs_extracted_66597984894)"
+    ]
+  }
+}

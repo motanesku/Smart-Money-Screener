@@ -85,7 +85,8 @@ def fetch_sp_midsmall() -> list[str]:
     tickers = []
     for name, url in sources:
         try:
-            tables = pd.read_html(url, flavor="lxml")
+            html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15).text
+            tables = pd.read_html(html, flavor="lxml")
             df     = tables[0]
             col    = next(
                 (c for c in df.columns

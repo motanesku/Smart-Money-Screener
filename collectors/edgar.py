@@ -276,7 +276,9 @@ def get_insider_data_edgar(ticker: str, days_back: int = 90) -> dict:
             # primaryDocument = numele real al fișierului (ex: "wf-form4_xxxx.xml")
             # Fallback: încearcă să găsim XML-ul din index dacă primaryDocument lipsește
             if primary_doc and primary_doc.lower().endswith(".xml"):
-                xml_url = f"{base_url}/{primary_doc}"
+                # Strip xslF345X06/ (EDGAR viewer prefix, not a real path)
+                clean_doc = primary_doc.split("/")[-1]
+                xml_url = f"{base_url}/{clean_doc}"
             else:
                 # Citim index-ul JSON al filing-ului pentru a afla fișierul XML
                 xml_url = _find_xml_in_index(cik_int, acc_clean) or f"{base_url}/{acc_clean}.xml"
