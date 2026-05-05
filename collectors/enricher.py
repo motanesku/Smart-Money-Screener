@@ -310,6 +310,15 @@ def enrich_single(ticker: str, scan_data: dict | None = None) -> dict:
 
     s_sideways, sig_side = get_sideways_score(ticker)
 
+    # New collectors (v8) — News, SIC, Earnings
+    from collectors.news import get_news_sentiment
+    from collectors.sic import get_sic_code
+    from collectors.earnings_news import get_earnings_from_edgar
+
+    news = get_news_sentiment(ticker)
+    sic = get_sic_code(ticker)
+    earn_8k = get_earnings_from_edgar(ticker)
+
     # Date din scanner
     vol_ratio    = float(sd.get("vol_ratio") or 0)
     price        = sd.get("price") or 0.0
@@ -456,7 +465,18 @@ def enrich_single(ticker: str, scan_data: dict | None = None) -> dict:
         "inst_ownership_pct":    profile.get("inst_own_pct"),
 
         # Earnings context
-        "days_to_earnings":    days_to_earn,
+        "days_to_earnings":    earn_8k.get("days_to_earnings") or days_to_earn,
+        "earnings_date":       earn_8k.get("earnings_date"),
+        "earnings_source":     earn_8k.get("earnings_source"),
+
+        # SIC enrichment
+        "sic_code":            sic.get("sic_code"),
+        "sic_description":     sic.get("sic_description"),
+
+        # News sentiment
+        "news_signal":         news.get("news_signal"),
+        "news_headline":       news.get("news_headline"),
+        "news_category":       news.get("news_category"),
 
         # folosit în get_ai_thesis
         "persistence_days_calc": p_count,

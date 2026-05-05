@@ -163,6 +163,15 @@ def save_enriched(results: list[dict]):
             "thesis":                r.get("thesis") or "",
             # AI Analysis
             "ai_thesis_ro":          r.get("ai_thesis_ro") or "",
+            # New collectors (v8) — News, SIC, Earnings
+            "news_signal":           r.get("news_signal"),
+            "news_headline":         r.get("news_headline") or "",
+            "news_category":         r.get("news_category"),
+            "sic_code":              int(r.get("sic_code")) if r.get("sic_code") else None,
+            "sic_description":       r.get("sic_description") or "",
+            "earnings_date":         r.get("earnings_date"),
+            "earnings_source":       r.get("earnings_source"),
+            "days_to_earnings":      int(r.get("days_to_earnings")) if r.get("days_to_earnings") is not None else None,
         })
     try:
         get_client().table("enriched").upsert(rows, on_conflict="enrich_date,ticker").execute()
