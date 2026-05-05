@@ -79,10 +79,9 @@ def get_sic_code(ticker: str) -> dict:
         resp.raise_for_status()
         data = resp.json()
 
-        # SIC se află în entity property
-        company_info = data.get("entityInformation", {})
-        sic_code = company_info.get("standardIndustryClassification", "").strip()
-        sic_desc = company_info.get("standardIndustryClassificationDescription", "").strip()
+        # SIC se află la nivelul top al JSON-ului, nu în entityInformation
+        sic_code = str(data.get("sic", "") or "").strip()
+        sic_desc = str(data.get("sicDescription", "") or "").strip()
 
         if sic_code and sic_code.isdigit():
             sic_code = int(sic_code)

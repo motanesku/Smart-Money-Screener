@@ -14,10 +14,15 @@ Date disponibile:
   - Format CSV: Date, Symbol, ShortVolume, ShortExemptVolume, TotalVolume, Market
   - Fișierele sunt disponibile cu 1 zi întârziere
 
-Short Squeeze Score (0-30 adăugat la score total):
-  - short_ratio > 0.45 + vol_spike >= 3x + insider_buys >= 1 → 30
-  - short_ratio > 0.40 + vol_spike >= 2x                    → 20
-  - short_ratio > 0.30                                      → 10
+ATENȚIE — distincție importantă de metrici:
+  - short_sale_ratio (FINRA): ShortVolume / TotalVolume pe zi de tranzacționare
+    = fracția din volumul zilnic care e vânzare short, NU % din float
+    Valori tipice: 0.30-0.55 sunt normale; praguri de mai sus sunt calibrate pentru asta.
+  - short_float_pct (yfinance): ShortInterest / FloatShares
+    = % din acțiunile disponibile care sunt vândute short (ex. GME era 140%)
+    Survine din raportările bi-lunare FINRA/exchanges, latență 2 săptămâni.
+  Cele două NU sunt comparabile direct. Pragurile din această funcție se referă la
+  short_sale_ratio FINRA zilnic, nu la short % of float.
 """
 
 import io

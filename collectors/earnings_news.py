@@ -39,11 +39,11 @@ def get_earnings_from_edgar(ticker: str) -> dict:
 
         url = "https://efts.sec.gov/LATEST/search-index"
         params = {
-            "forms": "8-K",
+            "q":         f'"{ticker}"',
+            "forms":     "8-K",
             "dateRange": "custom",
-            "startdt": start_date,
-            "enddt": today,
-            "hits.hits.total": 50,
+            "startdt":   start_date,
+            "enddt":     today,
         }
 
         resp = requests.get(url, headers=SEC_HEADERS, params=params, timeout=15)

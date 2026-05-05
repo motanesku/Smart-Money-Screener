@@ -2,6 +2,7 @@
 News sentiment classification via RSS feeds + keyword analysis.
 Detectează articole care menționează un ticker și clasifică sentiment (buy/sell/neutral).
 """
+import re
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -155,12 +156,11 @@ def _fetch_articles() -> list[dict]:
 def _contains_ticker(text: str, ticker: str) -> bool:
     """
     Verifică dacă text menționează ticker-ul explicit.
-    Caută: $TICKER sau [ TICKER ] cu limite de cuvânt.
+    Caută: $TICKER sau TICKER cu word boundary (evită false positive AAPL în AAPLE).
     """
     text_upper = text.upper()
-    # Caută $TICKER sau (TICKER) sau TICKER cu spații
-    import re
-    pattern = rf"(\${ticker}|[()\s]{ticker}[()\s])"
+    ticker_esc = re.escape(ticker)
+    pattern = rf"\${ticker_esc}|\b{ticker_esc}\b"
     return bool(re.search(pattern, text_upper))
 
 

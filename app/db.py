@@ -54,8 +54,9 @@ def save_scan_results(results: list[dict]):
         "volume":             int(r.get("volume") or 0),
         "avg_volume_20d":     int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
         "vol_ratio":          r.get("vol_ratio"),
-        "rs_vs_sector":       r.get("rs_vs_sector"),       # NOU v2
-        "sector_heat_score":  r.get("sector_heat_score"),  # NOU v2
+        "rs_vs_sector":       r.get("rs_vs_sector"),
+        "sector_heat_score":  r.get("sector_heat_score"),
+        "raw_perf":           r.get("raw_perf"),           # performanță zilnică 0-1 (ex 0.032 = +3.2%)
     } for r in results]
     get_client().table("scan_results").upsert(rows, on_conflict="scan_date,ticker").execute()
 
@@ -88,6 +89,7 @@ def save_enriched(results: list[dict]):
             "volume":                int(r.get("volume") or 0),
             "avg_volume_20d":        int(r.get("avg_volume_20d") or r.get("avg_volume") or 0),
             "vol_ratio":             r.get("vol_ratio"),
+            "price_change_pct":      r.get("price_change_pct"),  # % schimbare preț zi (din raw_perf * 100)
             # Sector context (din scanner)
             "rs_vs_sector":          r.get("rs_vs_sector"),
             "sector_heat_score":     int(r.get("sector_heat_score") or 0),
@@ -182,7 +184,7 @@ def save_enriched(results: list[dict]):
         print("  [DB] Fallback: salvăm fără coloanele v6/v7. Rulează migration_v7 în Supabase!")
         V5_COLS = {
             "enrich_date","ticker","company_name","sector","industry","market_cap",
-            "price","volume","avg_volume_20d","vol_ratio","rs_vs_sector","sector_heat_score",
+            "price","volume","avg_volume_20d","vol_ratio","price_change_pct","rs_vs_sector","sector_heat_score",
             "insider_buys_90d","insider_buy_value","insider_sells_90d","insider_sell_value",
             "top_insider_role","net_insider_signal","is_10b5_plan",
             "inst_ownership_pct","short_interest_pct","short_sale_volume",

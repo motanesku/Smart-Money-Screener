@@ -326,6 +326,9 @@ def enrich_single(ticker: str, scan_data: dict | None = None) -> dict:
     avg_vol_20d  = int(sd.get("avg_volume_20d") or 0)
     rs_vs_sector = sd.get("rs_vs_sector")
     sector_heat  = int(sd.get("sector_heat_score") or 0)
+    # raw_perf din scanner = (close/prev_close - 1), convertim la %
+    raw_perf     = sd.get("raw_perf")
+    price_change_pct = round(raw_perf * 100, 2) if raw_perf is not None else None
 
     vol_usd = float(price) * volume if price and volume else 0.0
 
@@ -392,6 +395,7 @@ def enrich_single(ticker: str, scan_data: dict | None = None) -> dict:
         "avg_volume_20d":       avg_vol_20d,
         "vol_ratio":            round(vol_ratio, 4),
         "vol_usd":              round(vol_usd, 0),
+        "price_change_pct":     price_change_pct,
         "rs_vs_sector":         rs_vs_sector,
         "sector_heat_score":    sector_heat,
 
@@ -464,8 +468,8 @@ def enrich_single(ticker: str, scan_data: dict | None = None) -> dict:
         "ownership_signal_text": "",
         "inst_ownership_pct":    profile.get("inst_own_pct"),
 
-        # Earnings context
-        "days_to_earnings":    earn_8k.get("days_to_earnings") or days_to_earn,
+        # Earnings context — use `is not None` check so days_to_earnings=0 (today) is preserved
+        "days_to_earnings":    earn_8k.get("days_to_earnings") if earn_8k.get("days_to_earnings") is not None else days_to_earn,
         "earnings_date":       earn_8k.get("earnings_date"),
         "earnings_source":     earn_8k.get("earnings_source"),
 

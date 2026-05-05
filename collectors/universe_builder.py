@@ -56,11 +56,11 @@ def fetch_active_tickers() -> list[dict]:
                     results[sym] = {
                         "ticker":       sym,
                         "company_name": item.get("name") or item.get("companyName") or "",
-                        "exchange":     "",
-                        "sector":       "",
-                        "industry":     "",
+                        "exchange":     item.get("exchange") or item.get("exchangeShortName") or "",
+                        "sector":       item.get("sector") or item.get("sectorName") or "",
+                        "industry":     item.get("industry") or item.get("industryName") or "",
                         "market_cap":   int(item.get("marketCap") or 0),
-                        "avg_volume":   int(item.get("volume") or 0),
+                        "avg_volume":   int(item.get("volume") or item.get("avgVolume") or 0),
                         "sources":      [],
                     }
                 results[sym]["sources"].append(label)

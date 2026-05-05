@@ -17,7 +17,6 @@ NOU: insider_quality_score() — nu toate tranzacțiile sunt egale
   - Open market purchase > exercise of options (10-b5-1 plan)
 """
 
-import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
@@ -146,66 +145,6 @@ def _parse_form4_xml(xml_url: str) -> dict:
     except Exception as e:
         print(f"    [EDGAR XML] parse error {xml_url}: {e}")
     return result
-
-
-def _get_filing_xml_url(cik: str, accession: str) -> str | None:
-    """
-    Din accession number, construiește URL-ul către fișierul XML al Form 4.
-    Accession format: 0001234567-24-000123 → 000123456724000123
-    """
-    acc_clean = accession.replace("-", "")
-    index_url = f"{EDGAR_ARCHIVES}/Archives/edgar/full-index/{acc_clean[:4]}/{acc_clean[4:6]}"
-    # Metoda directă: construim URL-ul din submission index
-    filing_url = (
-        f"{EDGAR_ARCHIVES}/Archives/edgar/data/{int(cik)}/"
-        f"{acc_clean}/"
-    )
-    try:
-        time.sleep(0.1)
-        r = requests.get(filing_url, headers=HEADERS, timeout=10)
-        # Găsim fișierul XML principal (nu index)
-        xml_files = re.findall(r'href="([^"]+\.xml)"', r.text, re.IGNORECASE)
-        for f in xml_files:
-            if "index" not in f.lower():
-                return f"https://www.sec.gov{f}" if f.startswith("/") else f"{filing_url}{f}"
-    except Exception:
-        pass
-    return None
-
-
-def _find_xml_in_index(cik_int: str, acc_clean: str) -> str | None:
-    """
-    Fallback: citește index-ul JSON al unui filing și returnează URL-ul
-    primului fișier XML care nu e un index sau stylesheet.
-    Folosit când primaryDocument lipsește sau nu e XML.
-    """
-    try:
-        time.sleep(0.1)
-        index_url = (
-            f"{EDGAR_ARCHIVES}/Archives/edgar/data/{cik_int}/{acc_clean}/"
-            f"{acc_clean}-index.json"
-        )
-        r = requests.get(index_url, headers=HEADERS, timeout=10)
-        r.raise_for_status()
-        docs = r.json().get("documents", [])
-        for doc in docs:
-            name = doc.get("document", "")
-            dtype = (doc.get("type") or "").upper()
-            # Vrem Form 4 XML, nu index sau stylesheet
-            if name.lower().endswith(".xml") and "4" in dtype:
-                return (
-                    f"{EDGAR_ARCHIVES}/Archives/edgar/data/{cik_int}/{acc_clean}/{name}"
-                )
-        # Dacă nu am găsit după tip, luăm primul XML care nu e index
-        for doc in docs:
-            name = doc.get("document", "")
-            if name.lower().endswith(".xml") and "index" not in name.lower():
-                return (
-                    f"{EDGAR_ARCHIVES}/Archives/edgar/data/{cik_int}/{acc_clean}/{name}"
-                )
-    except Exception:
-        pass
-    return None
 
 
 def get_insider_data_edgar(ticker: str, days_back: int = 90) -> dict:
