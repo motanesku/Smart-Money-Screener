@@ -4,7 +4,7 @@ Descarcă numeric SIC codes + descriptions pentru identificare industrială.
 """
 import requests
 import time
-from app.utils.logger import log_warn
+def log_warn(msg): print(msg)
 
 # Cache in-memory per proces
 _sic_cache: dict[str, tuple[int, str] | None] = {}

@@ -6,7 +6,7 @@ import re
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from app.utils.logger import log_warn
+def log_warn(msg): print(msg)
 
 # RSS feeds (6 surse)
 RSS_FEEDS = [

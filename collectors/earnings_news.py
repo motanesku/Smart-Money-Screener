@@ -6,7 +6,7 @@ sau a publicat guidance (Item 7.01 — Reg FD Disclosure).
 import requests
 import re
 from datetime import datetime, timedelta
-from app.utils.logger import log_warn
+def log_warn(msg): print(msg)
 
 SEC_HEADERS = {
     "User-Agent": "smartmoney/1.0 danut.fagadau@gmail.com",
