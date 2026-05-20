@@ -1,160 +1,184 @@
 """
-Universe Builder v2 — fără FMP, fără API key extern.
+Universe Builder v3 — ETF Holdings oficiale (fără Wikipedia, fără API key)
 
-Surse:
-  S&P 500   → Wikipedia (company_name, sector, industry)
-  NASDAQ 100 → Wikipedia
-  S&P MidCap 400 → Wikipedia
+Surse autoritare, actualizate zilnic de administratorii indicilor:
+  S&P 500    → SPY holdings (State Street SSGA)
+  S&P 400    → MDY holdings (State Street SSGA)
+  NASDAQ 100 → QQQ holdings (Invesco)
 
-Filtru:
-  avg_volume_20d > 500,000 acțiuni (din yfinance batch OHLCV 30d)
-  Market cap > $300M — implicit prin apartenența la index
+Include ticker, company_name, sector GICS, industry.
+Filtru: avg_volume_20d > 500,000 acțiuni (din yfinance batch OHLCV).
 
 Rulează duminică (cron săptămânal).
 """
+import io
 import sys
 import time
-import requests
+
 import pandas as pd
+import requests
 import yfinance as yf
 
-HEADERS     = {"User-Agent": "Mozilla/5.0 (compatible; SmartMoneyScreener/2.0)"}
 MIN_AVG_VOL = 500_000
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
-# ── Wikipedia parsers ─────────────────────────────────────────
 
-def _parse_wiki_index(url: str, index_name: str,
-                      ticker_hints: list[str],
-                      name_hints: list[str],
-                      sector_hints: list[str]) -> list[dict]:
+# ── Descărcări ETF Holdings ───────────────────────────────────
+
+def _get_spy_holdings() -> list[dict]:
     """
-    Generic Wikipedia index parser.
-    Caută primul tabel care conține cel puțin 50 de rânduri cu ticker-uri valide.
-    Compatibil cu pandas 2.x (folosește io.StringIO).
+    S&P 500 din SPY ETF holdings (State Street SSGA).
+    URL-ul returnează un Excel cu holdings-urile zilnice.
     """
-    import io
-
+    url = (
+        "https://www.ssga.com/library-content/products/fund-data/etfs/us/"
+        "holdings-daily-us-en-spy.xlsx"
+    )
     try:
         resp = requests.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()
-        html = resp.text
+        df = pd.read_excel(io.BytesIO(resp.content), skiprows=4, engine="openpyxl")
+
+        # Coloane tipice: Name | Ticker | Identifier | SEDOL | Weight |
+        #                 Shares Held | Local Market Value | ...
+        results = _parse_ssga_holdings(df, "SP500")
+        print(f"  [SP500/SPY] {len(results)} tickers")
+        return results
     except Exception as e:
-        print(f"  [{index_name}] EROARE download: {e}")
+        print(f"  [SP500/SPY] EROARE: {e}")
         return []
 
-    # pandas 2.x necesită StringIO; încearcă mai mulți parseri
-    for parser in ["lxml", "html.parser", "html5lib"]:
-        try:
-            tables = pd.read_html(io.StringIO(html), flavor=parser)
-            break
-        except Exception:
-            tables = []
-            continue
 
-    if not tables:
-        print(f"  [{index_name}] EROARE: niciun tabel HTML găsit")
+def _get_mdy_holdings() -> list[dict]:
+    """
+    S&P MidCap 400 din MDY ETF holdings (State Street SSGA).
+    """
+    url = (
+        "https://www.ssga.com/library-content/products/fund-data/etfs/us/"
+        "holdings-daily-us-en-mdy.xlsx"
+    )
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_excel(io.BytesIO(resp.content), skiprows=4, engine="openpyxl")
+        results = _parse_ssga_holdings(df, "SP400")
+        print(f"  [SP400/MDY] {len(results)} tickers")
+        return results
+    except Exception as e:
+        print(f"  [SP400/MDY] EROARE: {e}")
         return []
 
-    # Colectează toți candidații, returnează tabelul cu cele mai multe tickers
-    all_candidates: list[list[dict]] = []
 
-    for t_idx, df in enumerate(tables[:10]):
-        if len(df) < 20:
+def _get_qqq_holdings() -> list[dict]:
+    """
+    NASDAQ 100 din QQQ ETF holdings (Invesco).
+    """
+    url = (
+        "https://www.invesco.com/us/financial-products/etfs/holdings/main/"
+        "holdings/0?audienceType=Investor&action=download&ticker=QQQ"
+    )
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text), skiprows=4)
+        results = _parse_invesco_holdings(df, "NDX100")
+        print(f"  [NDX100/QQQ] {len(results)} tickers")
+        return results
+    except Exception as e:
+        print(f"  [NDX100/QQQ] EROARE: {e}")
+        return []
+
+
+def _parse_ssga_holdings(df: pd.DataFrame, index_name: str) -> list[dict]:
+    """
+    Parser pentru fișierele SSGA (SPY, MDY).
+    Coloane relevante: Name, Ticker, Sector (dacă există).
+    """
+    # Normalizează numele coloanelor
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # Găsește coloana cu ticker-uri
+    ticker_col = _find_col(df.columns, ["Ticker", "Symbol", "Identifier"])
+    name_col   = _find_col(df.columns, ["Name", "Security", "Description"])
+    sector_col = _find_col(df.columns, ["Sector", "GICS"])
+
+    if not ticker_col:
+        return []
+
+    results = []
+    for _, row in df.iterrows():
+        ticker = str(row[ticker_col]).strip().upper()
+        # Exclude cash, futures, sau linii invalide
+        if (not ticker or len(ticker) > 6 or
+                not ticker.replace("-", "").isalpha() or
+                ticker in ("NAN", "-", "TICKER")):
             continue
 
-        # Aplatizează MultiIndex columns (ex: ('Added','Ticker') → 'Added Ticker')
-        if hasattr(df.columns, "levels"):
-            df.columns = [
-                " ".join(str(lvl) for lvl in col if str(lvl) not in ("", "nan")).strip()
-                for col in df.columns
-            ]
-        else:
-            df.columns = [str(c) for c in df.columns]
+        results.append({
+            "ticker":       ticker,
+            "company_name": str(row[name_col]).strip() if name_col else "",
+            "sector":       str(row[sector_col]).strip() if sector_col else "",
+            "industry":     "",
+            "index_member": index_name,
+            "market_cap":   0,
+            "avg_volume":   0,
+        })
 
-        cols = list(df.columns)
+    return results
 
-        def _find_col(hints):
-            return next(
-                (c for c in cols if any(h.lower() in c.lower() for h in hints)),
-                None
-            )
 
-        ticker_col   = _find_col(ticker_hints)
-        if ticker_col is None:
+def _parse_invesco_holdings(df: pd.DataFrame, index_name: str) -> list[dict]:
+    """
+    Parser pentru fișierele Invesco (QQQ).
+    Coloane relevante: Name, Ticker, Sector.
+    """
+    df.columns = [str(c).strip() for c in df.columns]
+
+    ticker_col = _find_col(df.columns, ["Ticker", "Symbol", "Security Identifier"])
+    name_col   = _find_col(df.columns, ["Name", "Security", "Holding"])
+    sector_col = _find_col(df.columns, ["Sector", "GICS"])
+
+    if not ticker_col:
+        return []
+
+    results = []
+    for _, row in df.iterrows():
+        ticker = str(row[ticker_col]).strip().upper()
+        if (not ticker or len(ticker) > 6 or
+                not ticker.replace("-", "").isalpha() or
+                ticker in ("NAN", "-", "TICKER")):
             continue
 
-        name_col     = _find_col(name_hints)
-        # "GICS economic sector" (SP400) și "GICS Sector" (SP500) ambele conțin "sector"
-        sector_col   = _find_col(sector_hints + ["sector"])
-        industry_col = _find_col(["sub-industry", "sub industry", "sub"])
-        if industry_col is None:
-            industry_col = _find_col(["industry"])
+        results.append({
+            "ticker":       ticker,
+            "company_name": str(row[name_col]).strip() if name_col else "",
+            "sector":       str(row[sector_col]).strip() if sector_col else "",
+            "industry":     "",
+            "index_member": index_name,
+            "market_cap":   0,
+            "avg_volume":   0,
+        })
 
-        results = []
-        for _, row in df.iterrows():
-            raw    = str(row[ticker_col]).strip()
-            ticker = raw.replace(".", "-").upper()
-            if (not ticker or len(ticker) > 6 or
-                    ticker in ("NAN", "TICKER", "SYMBOL", "N/A", "-")):
-                continue
-            if not ticker.replace("-", "").isalpha():
-                continue
-
-            results.append({
-                "ticker":       ticker,
-                "company_name": str(row[name_col]).strip()     if name_col     else "",
-                "sector":       str(row[sector_col]).strip()   if sector_col   else "",
-                "industry":     str(row[industry_col]).strip() if industry_col else "",
-                "index_member": index_name,
-                "market_cap":   0,
-                "avg_volume":   0,
-            })
-
-        if len(results) >= 20:
-            all_candidates.append(results)
-
-    # Returnează tabelul cu cele mai multe tickers valide
-    if all_candidates:
-        best = max(all_candidates, key=len)
-        print(f"  [{index_name}] {len(best)} tickers")
-        return best
-
-    print(f"  [{index_name}] AVERTISMENT: niciun tabel valid găsit — verifică structura paginii Wikipedia")
-    return []
+    return results
 
 
-def get_sp500() -> list[dict]:
-    return _parse_wiki_index(
-        url="https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-        index_name="SP500",
-        ticker_hints=["Symbol", "Ticker"],
-        name_hints=["Security", "Company", "Name"],
-        sector_hints=["GICS Sector", "Sector"],
-    )
+def _find_col(columns, hints: list[str]) -> str | None:
+    """Găsește prima coloană care conține unul din hints (case-insensitive)."""
+    for col in columns:
+        if any(h.lower() in col.lower() for h in hints):
+            return col
+    return None
 
 
-def get_nasdaq100() -> list[dict]:
-    return _parse_wiki_index(
-        url="https://en.wikipedia.org/wiki/Nasdaq-100",
-        index_name="NDX100",
-        ticker_hints=["Ticker", "Symbol"],
-        name_hints=["Company", "Security", "Name"],
-        sector_hints=["GICS Sector", "Sector"],
-    )
-
-
-def get_sp400() -> list[dict]:
-    return _parse_wiki_index(
-        url="https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
-        index_name="SP400",
-        ticker_hints=["Ticker symbol", "Ticker", "Symbol"],
-        name_hints=["Company", "Security", "Name"],
-        sector_hints=["GICS Sector", "Sector"],
-    )
-
-
-# ── Volume enrichment ─────────────────────────────────────────
+# ── Volume enrichment din yfinance ───────────────────────────
 
 def _enrich_with_volume(tickers: list[str], batch_size: int = 100) -> dict[str, int]:
     """
@@ -162,8 +186,8 @@ def _enrich_with_volume(tickers: list[str], batch_size: int = 100) -> dict[str, 
     Returnează {ticker: avg_volume_20d}.
     """
     vol_map: dict[str, int] = {}
-    total_batches = (len(tickers) + batch_size - 1) // batch_size
-    print(f"  Volume enrich: {len(tickers)} tickers în {total_batches} batch-uri...")
+    total = (len(tickers) + batch_size - 1) // batch_size
+    print(f"  Volume enrich: {len(tickers)} tickers în {total} batch-uri...")
 
     for i in range(0, len(tickers), batch_size):
         batch = tickers[i: i + batch_size]
@@ -186,14 +210,13 @@ def _enrich_with_volume(tickers: list[str], batch_size: int = 100) -> dict[str, 
                         hist = raw[ticker]
                     else:
                         continue
-
                     vol = hist["Volume"].dropna()
                     if len(vol) >= 5:
                         vol_map[ticker] = int(vol.tail(20).mean())
                 except Exception:
                     pass
         except Exception as e:
-            print(f"  Batch {i // batch_size + 1}/{total_batches} eroare: {e}")
+            print(f"  Batch {i // batch_size + 1}/{total} eroare: {e}")
 
         if i + batch_size < len(tickers):
             time.sleep(0.5)
@@ -204,32 +227,33 @@ def _enrich_with_volume(tickers: list[str], batch_size: int = 100) -> dict[str, 
 # ── Main ──────────────────────────────────────────────────────
 
 def build_universe() -> list[dict]:
-    print("=== Universe Builder v2 ===")
+    print("=== Universe Builder v3 (ETF Holdings) ===")
 
-    print("Step 1: Descarcă indici din Wikipedia...", flush=True)
-    sp500  = get_sp500()
+    print("Step 1: Descarcă ETF holdings (SPY / MDY / QQQ)...")
+    sp500  = _get_spy_holdings()
+    sp400  = _get_mdy_holdings()
+    ndx100 = _get_qqq_holdings()
+
     print(f"  SP500 raw: {len(sp500)}", flush=True)
-    ndx100 = get_nasdaq100()
-    print(f"  NDX100 raw: {len(ndx100)}", flush=True)
-    sp400  = get_sp400()
     print(f"  SP400 raw: {len(sp400)}", flush=True)
+    print(f"  NDX100 raw: {len(ndx100)}", flush=True)
 
-    # Dedup: SP500 > NDX100 > SP400 (prioritate pentru sector/name)
+    # Dedup: SP500 > SP400 > NDX100 (SP500 are prioritate pt sector data)
     seen: dict[str, dict] = {}
-    for batch in [sp500, ndx100, sp400]:
+    for batch in [sp500, sp400, ndx100]:
         for item in batch:
             t = item["ticker"]
             if t not in seen:
                 seen[t] = item
 
-    all_items  = list(seen.values())
+    all_items   = list(seen.values())
     all_tickers = [t["ticker"] for t in all_items]
     print(f"  Total unic: {len(all_items)} tickers")
 
     print("Step 2: Enrich cu avg_volume din yfinance...")
     vol_map = _enrich_with_volume(all_tickers)
 
-    print("Step 3: Filtrare avg_volume > {:,}...".format(MIN_AVG_VOL))
+    print(f"Step 3: Filtrare avg_volume > {MIN_AVG_VOL:,}...")
     universe, filtered = [], 0
     for item in all_items:
         avg_vol = vol_map.get(item["ticker"], 0)
@@ -243,9 +267,11 @@ def build_universe() -> list[dict]:
 
     print(f"\nUniverse final: {len(universe)} tickers")
     print(f"  Filtrate (vol < {MIN_AVG_VOL:,}): {filtered}")
-    print(f"  SP500: {sum(1 for u in universe if u['index_member'] == 'SP500')}")
-    print(f"  NDX100: {sum(1 for u in universe if u['index_member'] == 'NDX100')}")
-    print(f"  SP400: {sum(1 for u in universe if u['index_member'] == 'SP400')}")
+    for idx in ["SP500", "SP400", "NDX100"]:
+        n = sum(1 for u in universe if u["index_member"] == idx)
+        s = sum(1 for u in universe if u["index_member"] == idx and u.get("sector", ""))
+        print(f"  {idx}: {n} tickers, {s} cu sector")
+
     return universe
 
 
@@ -258,16 +284,17 @@ if __name__ == "__main__":
         print("EROARE: Universe gol")
         sys.exit(1)
 
-    # Curăță records vechi fără index_member (NULL sau '') — rămășițe din FMP
+    # Curăță records vechi fără index_member
     try:
         db = get_client()
         db.table("universe").delete().eq("index_member", "").execute()
         db.table("universe").delete().is_("index_member", "null").execute()
-        print("Curățat records legacy (index_member gol/null)")
+        print("Curățat records legacy")
     except Exception as e:
         print(f"  Curățare legacy: {e}")
 
     save_universe(universe)
     print(f"\nSalvat {len(universe)} tickers în Supabase")
     for u in universe[:5]:
-        print(f"  {u['ticker']:<8}  {u['index_member']:<7}  vol={u['avg_volume']:>12,}  {u['sector']}")
+        print(f"  {u['ticker']:<8} {u['index_member']:<7} "
+              f"vol={u['avg_volume']:>12,}  {u['sector']}")
