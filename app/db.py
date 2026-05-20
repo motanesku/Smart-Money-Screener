@@ -37,8 +37,10 @@ def save_universe(tickers: list[dict]):
 
 
 def get_universe() -> list[dict]:
+    # Returnează doar membrii celor 3 indici — exclude legacy/junk
     res = get_client().table("universe").select(
-        "ticker,company_name,sector,industry,market_cap,avg_volume").execute()
+        "ticker,company_name,sector,industry,market_cap,avg_volume,index_member"
+    ).in_("index_member", ["SP500", "NDX100", "SP400"]).execute()
     return res.data or []
 
 

@@ -85,8 +85,9 @@ def _parse_wiki_index(url: str, index_name: str,
             continue
 
         name_col     = _find_col(name_hints)
-        sector_col   = _find_col(sector_hints)
-        industry_col = _find_col(["sub-industry", "sub industry"])
+        # "GICS economic sector" (SP400) și "GICS Sector" (SP500) ambele conțin "sector"
+        sector_col   = _find_col(sector_hints + ["sector"])
+        industry_col = _find_col(["sub-industry", "sub industry", "sub"])
         if industry_col is None:
             industry_col = _find_col(["industry"])
 
@@ -257,10 +258,12 @@ if __name__ == "__main__":
         print("EROARE: Universe gol")
         sys.exit(1)
 
-    # Curăță records vechi fără index_member (rămășițe din versiuni anterioare)
+    # Curăță records vechi fără index_member (NULL sau '') — rămășițe din FMP
     try:
-        get_client().table("universe").delete().eq("index_member", "").execute()
-        print("Curățat records legacy (index_member gol)")
+        db = get_client()
+        db.table("universe").delete().eq("index_member", "").execute()
+        db.table("universe").delete().is_("index_member", "null").execute()
+        print("Curățat records legacy (index_member gol/null)")
     except Exception as e:
         print(f"  Curățare legacy: {e}")
 
