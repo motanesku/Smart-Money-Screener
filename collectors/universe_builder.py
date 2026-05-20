@@ -18,7 +18,7 @@ import requests
 import pandas as pd
 import yfinance as yf
 
-HEADERS     = {"User-Agent": "Mozilla/5.0"}
+HEADERS     = {"User-Agent": "Mozilla/5.0 (compatible; SmartMoneyScreener/2.0)"}
 MIN_AVG_VOL = 500_000
 
 
@@ -30,61 +30,89 @@ def _parse_wiki_index(url: str, index_name: str,
                       sector_hints: list[str]) -> list[dict]:
     """
     Generic Wikipedia index parser.
-    Caută primul tabel care are o coloană ce se potrivește cu ticker_hints.
+    Caută primul tabel care conține cel puțin 50 de rânduri cu ticker-uri valide.
+    Compatibil cu pandas 2.x (folosește io.StringIO).
     """
+    import io
+
     try:
-        html = requests.get(url, headers=HEADERS, timeout=20).text
-        tables = pd.read_html(html, flavor="lxml")
+        resp = requests.get(url, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        html = resp.text
     except Exception as e:
         print(f"  [{index_name}] EROARE download: {e}")
         return []
 
-    for df in tables:
-        cols = {str(c): c for c in df.columns}
-        col_lower = {k.lower(): v for k, v in cols.items()}
+    # pandas 2.x necesită StringIO; încearcă mai mulți parseri
+    for parser in ["lxml", "html.parser", "html5lib"]:
+        try:
+            tables = pd.read_html(io.StringIO(html), flavor=parser)
+            break
+        except Exception:
+            tables = []
+            continue
 
+    if not tables:
+        print(f"  [{index_name}] EROARE: niciun tabel HTML găsit")
+        return []
+
+    # Caută tabelul corect printre primele 10
+    for t_idx, df in enumerate(tables[:10]):
+        if len(df) < 20:          # un index are cel puțin 20 de companii
+            continue
+
+        cols = [str(c) for c in df.columns]
+
+        # Găsește coloana cu ticker-uri
         ticker_col = next(
-            (cols[k] for k in cols if any(h.lower() in k.lower() for h in ticker_hints)),
+            (c for c in cols if any(h.lower() in c.lower() for h in ticker_hints)),
             None
         )
         if ticker_col is None:
             continue
 
+        # Coloane opționale
         name_col = next(
-            (cols[k] for k in cols if any(h.lower() in k.lower() for h in name_hints)),
+            (c for c in cols if any(h.lower() in c.lower() for h in name_hints)),
             None
         )
         sector_col = next(
-            (cols[k] for k in cols if any(h.lower() in k.lower() for h in sector_hints)),
+            (c for c in cols if any(h.lower() in c.lower() for h in sector_hints)),
             None
         )
         industry_col = next(
-            (cols[k] for k in cols if "sub-industry" in k.lower() or
-             ("industry" in k.lower() and "sub" not in k.lower())),
+            (c for c in cols if "sub-industry" in c.lower() or
+             ("industry" in c.lower() and "sub" not in c.lower())),
             None
         )
 
         results = []
         for _, row in df.iterrows():
-            raw = str(row[ticker_col]).strip()
+            raw    = str(row[ticker_col]).strip()
             ticker = raw.replace(".", "-").upper()
-            if not ticker or ticker in ("NAN", "TICKER", "SYMBOL") or len(ticker) > 6:
+            # Filtrează header-uri sau valori invalide
+            if (not ticker or len(ticker) > 6 or
+                    ticker in ("NAN", "TICKER", "SYMBOL", "N/A", "-")):
                 continue
+            # Verificare minimă că arată a ticker
+            if not ticker.replace("-", "").isalpha():
+                continue
+
             results.append({
                 "ticker":       ticker,
-                "company_name": str(row[name_col]).strip() if name_col is not None else "",
-                "sector":       str(row[sector_col]).strip() if sector_col is not None else "",
-                "industry":     str(row[industry_col]).strip() if industry_col is not None else "",
+                "company_name": str(row[name_col]).strip()     if name_col     else "",
+                "sector":       str(row[sector_col]).strip()   if sector_col   else "",
+                "industry":     str(row[industry_col]).strip() if industry_col else "",
                 "index_member": index_name,
                 "market_cap":   0,
                 "avg_volume":   0,
             })
 
-        if results:
-            print(f"  [{index_name}] {len(results)} tickers")
+        if len(results) >= 20:
+            print(f"  [{index_name}] {len(results)} tickers (tabel #{t_idx})")
             return results
 
-    print(f"  [{index_name}] tabel valid negăsit")
+    print(f"  [{index_name}] AVERTISMENT: niciun tabel valid găsit — verifică structura paginii Wikipedia")
     return []
 
 
@@ -170,10 +198,13 @@ def _enrich_with_volume(tickers: list[str], batch_size: int = 100) -> dict[str, 
 def build_universe() -> list[dict]:
     print("=== Universe Builder v2 ===")
 
-    print("Step 1: Descarcă indici din Wikipedia...")
+    print("Step 1: Descarcă indici din Wikipedia...", flush=True)
     sp500  = get_sp500()
+    print(f"  SP500 raw: {len(sp500)}", flush=True)
     ndx100 = get_nasdaq100()
+    print(f"  NDX100 raw: {len(ndx100)}", flush=True)
     sp400  = get_sp400()
+    print(f"  SP400 raw: {len(sp400)}", flush=True)
 
     # Dedup: SP500 > NDX100 > SP400 (prioritate pentru sector/name)
     seen: dict[str, dict] = {}
