@@ -56,7 +56,9 @@ def _parse_wiki_index(url: str, index_name: str,
         print(f"  [{index_name}] EROARE: niciun tabel HTML găsit")
         return []
 
-    # Caută tabelul corect printre primele 10
+    # Colectează toți candidații, returnează tabelul cu cele mai multe tickers
+    all_candidates: list[list[dict]] = []
+
     for t_idx, df in enumerate(tables[:10]):
         if len(df) < 20:          # un index are cel puțin 20 de companii
             continue
@@ -90,11 +92,9 @@ def _parse_wiki_index(url: str, index_name: str,
         for _, row in df.iterrows():
             raw    = str(row[ticker_col]).strip()
             ticker = raw.replace(".", "-").upper()
-            # Filtrează header-uri sau valori invalide
             if (not ticker or len(ticker) > 6 or
                     ticker in ("NAN", "TICKER", "SYMBOL", "N/A", "-")):
                 continue
-            # Verificare minimă că arată a ticker
             if not ticker.replace("-", "").isalpha():
                 continue
 
@@ -109,8 +109,13 @@ def _parse_wiki_index(url: str, index_name: str,
             })
 
         if len(results) >= 20:
-            print(f"  [{index_name}] {len(results)} tickers (tabel #{t_idx})")
-            return results
+            all_candidates.append(results)
+
+    # Returnează tabelul cu cele mai multe tickers valide
+    if all_candidates:
+        best = max(all_candidates, key=len)
+        print(f"  [{index_name}] {len(best)} tickers")
+        return best
 
     print(f"  [{index_name}] AVERTISMENT: niciun tabel valid găsit — verifică structura paginii Wikipedia")
     return []
@@ -243,12 +248,19 @@ def build_universe() -> list[dict]:
 
 if __name__ == "__main__":
     sys.path.insert(0, ".")
-    from app.db import save_universe
+    from app.db import save_universe, get_client
 
     universe = build_universe()
     if not universe:
         print("EROARE: Universe gol")
         sys.exit(1)
+
+    # Curăță records vechi fără index_member (rămășițe din versiuni anterioare)
+    try:
+        get_client().table("universe").delete().eq("index_member", "").execute()
+        print("Curățat records legacy (index_member gol)")
+    except Exception as e:
+        print(f"  Curățare legacy: {e}")
 
     save_universe(universe)
     print(f"\nSalvat {len(universe)} tickers în Supabase")
