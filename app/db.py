@@ -24,13 +24,14 @@ def save_universe(tickers: list[dict]):
     if not tickers:
         return
     rows = [{
-        "ticker":       (t.get("ticker") or "").upper(),
-        "company_name": t.get("company_name") or "",
-        "exchange":     t.get("exchange") or "",
-        "sector":       t.get("sector") or "",
-        "industry":     t.get("industry") or "",
-        "market_cap":   int(t.get("market_cap") or 0),
-        "avg_volume":   int(t.get("avg_volume") or t.get("avg_volume_20d") or 0),
+        "ticker":        (t.get("ticker") or "").upper(),
+        "company_name":  t.get("company_name") or "",
+        "exchange":      t.get("exchange") or "",
+        "sector":        t.get("sector") or "",
+        "industry":      t.get("industry") or "",
+        "market_cap":    int(t.get("market_cap") or 0),
+        "avg_volume":    int(t.get("avg_volume") or t.get("avg_volume_20d") or 0),
+        "index_member":  t.get("index_member") or "",
     } for t in tickers]
     get_client().table("universe").upsert(rows, on_conflict="ticker").execute()
 
@@ -327,6 +328,143 @@ def add_to_watchlist(ticker: str, notes: str = ""):
 
 def remove_from_watchlist(ticker: str):
     get_client().table("watchlist").delete().eq("ticker", ticker.upper()).execute()
+
+
+# ── ENRICHED V2 (Witness-Based) ───────────────────────────────────────────────
+
+def save_enriched_v2(results: list[dict]):
+    if not results:
+        return
+    today = date.today().isoformat()
+    rows = []
+    for r in results:
+        rows.append({
+            "enrich_date":        today,
+            "ticker":             (r.get("ticker") or "").upper(),
+            "company_name":       r.get("company_name") or "",
+            "sector":             r.get("sector") or "",
+            "market_cap":         int(r.get("market_cap") or 0),
+            "price":              r.get("price"),
+            "price_change_pct":   r.get("price_change_pct"),
+            "high_52w":           r.get("high_52w"),
+            "low_52w":            r.get("low_52w"),
+            "vol_today":          int(r.get("vol_today") or 0),
+            "vol_avg_20d":        int(r.get("vol_avg_20d") or 0),
+            "vol_avg_63d":        int(r.get("vol_avg_63d") or 0),
+            "vol_zscore_21v63":   r.get("vol_zscore_21v63"),
+            "vol_witness":        r.get("vol_witness") or "NEUTRU",
+            "close_position":     r.get("close_position"),
+            "atr_14":             r.get("atr_14"),
+            "atr_pct_63d":        r.get("atr_pct_63d"),
+            "range_width_21d":    r.get("range_width_21d"),
+            "rs_defense_score":   r.get("rs_defense_score"),
+            "rs_defense_days":    int(r.get("rs_defense_days") or 0),
+            "sector_etf":         r.get("sector_etf") or "",
+            "wyckoff_witness":    r.get("wyckoff_witness") or "NONE",
+            "spring_date":        r.get("spring_date"),
+            "poc_1y":             r.get("poc_1y"),
+            "vah_1y":             r.get("vah_1y"),
+            "val_1y":             r.get("val_1y"),
+            "poc_3m":             r.get("poc_3m"),
+            "dist_poc_1y_pct":    r.get("dist_poc_1y_pct"),
+            "dist_poc_3m_pct":    r.get("dist_poc_3m_pct"),
+            "trend_label":        r.get("trend_label") or "FĂRĂ SEMNAL",
+        })
+    get_client().table("enriched_v2").upsert(rows, on_conflict="enrich_date,ticker").execute()
+    print(f"  [DB] enriched_v2: {len(rows)} rows salvate")
+
+
+def get_enriched_v2(days_back: int = 1,
+                     trend_labels: list[str] | None = None) -> list[dict]:
+    """
+    Returnează ultimele rezultate din enriched_v2.
+    trend_labels=None → toți. Altfel filtrează după etichetele specificate.
+    """
+    since = (date.today() - timedelta(days=days_back)).isoformat()
+    q = (get_client().table("enriched_v2")
+         .select("*")
+         .gte("enrich_date", since)
+         .order("enrich_date", desc=True))
+
+    if trend_labels:
+        q = q.in_("trend_label", trend_labels)
+
+    res = q.execute()
+    rows = res.data or []
+
+    # Dedup: păstrează cel mai recent per ticker
+    seen: dict[str, dict] = {}
+    for row in rows:
+        t = row["ticker"]
+        if t not in seen:
+            seen[t] = row
+    return list(seen.values())
+
+
+def get_ticker_history_v2(ticker: str, limit: int = 30) -> list[dict]:
+    """Istoricul unui ticker din enriched_v2 — pentru grafice de tendință."""
+    res = (get_client().table("enriched_v2")
+           .select("*")
+           .eq("ticker", ticker.upper())
+           .order("enrich_date", desc=True)
+           .limit(limit)
+           .execute())
+    rows = res.data or []
+    rows.reverse()
+    return rows
+
+
+def get_sector_stats_v2(days_back: int = 1) -> list[dict]:
+    """
+    Agregare sectoare din enriched_v2.
+    Returnează distribuția trend_label per sector.
+    """
+    since = (date.today() - timedelta(days=days_back)).isoformat()
+    try:
+        res = (get_client().table("enriched_v2")
+               .select("sector,trend_label,atr_pct_63d,vol_zscore_21v63")
+               .gte("enrich_date", since)
+               .neq("sector", "")
+               .execute())
+        rows = res.data or []
+        if not rows:
+            return []
+
+        from collections import defaultdict
+        agg = defaultdict(lambda: {
+            "count": 0, "breakout": 0, "accumulation": 0,
+            "distribution": 0, "exhaustion": 0,
+            "atr_sum": 0.0, "zscore_sum": 0.0,
+        })
+        for r in rows:
+            s = r.get("sector") or "Unknown"
+            agg[s]["count"] += 1
+            label = r.get("trend_label") or ""
+            if label == "GATA DE BREAKOUT":    agg[s]["breakout"]     += 1
+            if label == "ACUMULARE ASCUNSĂ":   agg[s]["accumulation"] += 1
+            if label == "DISTRIBUȚIE":         agg[s]["distribution"] += 1
+            if label == "EPUIZARE":            agg[s]["exhaustion"]   += 1
+            agg[s]["atr_sum"]    += float(r.get("atr_pct_63d") or 50)
+            agg[s]["zscore_sum"] += float(r.get("vol_zscore_21v63") or 0)
+
+        return [
+            {
+                "sector":       sector,
+                "count":        v["count"],
+                "breakout":     v["breakout"],
+                "accumulation": v["accumulation"],
+                "distribution": v["distribution"],
+                "exhaustion":   v["exhaustion"],
+                "avg_atr_pct":  round(v["atr_sum"] / v["count"], 1),
+                "avg_zscore":   round(v["zscore_sum"] / v["count"], 3),
+            }
+            for sector, v in sorted(agg.items(), key=lambda x: -(
+                x[1]["breakout"] + x[1]["accumulation"]
+            ))
+        ]
+    except Exception as e:
+        print(f"[sector_stats_v2] eroare: {e}")
+        return []
 
 
 def get_watchlist_enriched() -> list[dict]:

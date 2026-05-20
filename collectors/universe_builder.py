@@ -1,152 +1,212 @@
 """
-Universe builder — rulează o dată pe săptămână (duminică 20:00 UTC).
+Universe Builder v2 — fără FMP, fără API key extern.
 
-Strategie NOUĂ după testare endpoint-uri free FMP:
-  - /stable/biggest-gainers   → tickers cu miscare mare
-  - /stable/biggest-losers    → tickers cu miscare mare
-  - /stable/most-actives      → tickers cu volum mare
-  + Wikipedia S&P400/S&P600   → mid/small cap base list
+Surse:
+  S&P 500   → Wikipedia (company_name, sector, industry)
+  NASDAQ 100 → Wikipedia
+  S&P MidCap 400 → Wikipedia
 
-Combinatia acestora acopera exact universul relevant:
-tickers cu activitate reala, nu o lista statica de 8000.
+Filtru:
+  avg_volume_20d > 500,000 acțiuni (din yfinance batch OHLCV 30d)
+  Market cap > $300M — implicit prin apartenența la index
 
-FMP calls: 3 (din 250/zi) — rulat 1x/saptamana deci ~0.4 calls/zi medie.
+Rulează duminică (cron săptămânal).
 """
-import os
 import sys
 import time
 import requests
 import pandas as pd
+import yfinance as yf
 
-FMP_KEY  = os.environ.get("FMP_KEY", "")
-FMP_BASE = "https://financialmodelingprep.com/stable"
-
-
-def fetch_fmp(endpoint: str) -> list[dict]:
-    """Fetch generic FMP endpoint."""
-    url = f"{FMP_BASE}/{endpoint}"
-    r   = requests.get(url, params={"apikey": FMP_KEY}, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-    if isinstance(data, list):
-        return data
-    return []
+HEADERS     = {"User-Agent": "Mozilla/5.0"}
+MIN_AVG_VOL = 500_000
 
 
-def fetch_active_tickers() -> list[dict]:
+# ── Wikipedia parsers ─────────────────────────────────────────
+
+def _parse_wiki_index(url: str, index_name: str,
+                      ticker_hints: list[str],
+                      name_hints: list[str],
+                      sector_hints: list[str]) -> list[dict]:
     """
-    Combina gainers + losers + most-actives din FMP.
-    Acestia sunt tickerii cu miscare reala — exact ce ne intereseaza.
-    3 call-uri FMP.
+    Generic Wikipedia index parser.
+    Caută primul tabel care are o coloană ce se potrivește cu ticker_hints.
     """
-    results = {}
+    try:
+        html = requests.get(url, headers=HEADERS, timeout=20).text
+        tables = pd.read_html(html, flavor="lxml")
+    except Exception as e:
+        print(f"  [{index_name}] EROARE download: {e}")
+        return []
 
-    for endpoint, label in [
-        ("biggest-gainers", "gainers"),
-        ("biggest-losers",  "losers"),
-        ("most-actives",    "actives"),
-    ]:
-        try:
-            data = fetch_fmp(endpoint)
-            for item in data:
-                sym = (item.get("symbol") or item.get("ticker") or "").strip().upper()
-                if not sym or len(sym) > 5 or "." in sym:
-                    continue
-                if sym not in results:
-                    results[sym] = {
-                        "ticker":       sym,
-                        "company_name": item.get("name") or item.get("companyName") or "",
-                        "exchange":     item.get("exchange") or item.get("exchangeShortName") or "",
-                        "sector":       item.get("sector") or item.get("sectorName") or "",
-                        "industry":     item.get("industry") or item.get("industryName") or "",
-                        "market_cap":   int(item.get("marketCap") or 0),
-                        "avg_volume":   int(item.get("volume") or item.get("avgVolume") or 0),
-                        "sources":      [],
-                    }
-                results[sym]["sources"].append(label)
-            print(f"  {endpoint}: {len(data)} tickers")
-            time.sleep(0.3)
-        except Exception as e:
-            print(f"  {endpoint} EROARE: {e}")
+    for df in tables:
+        cols = {str(c): c for c in df.columns}
+        col_lower = {k.lower(): v for k, v in cols.items()}
 
-    return list(results.values())
+        ticker_col = next(
+            (cols[k] for k in cols if any(h.lower() in k.lower() for h in ticker_hints)),
+            None
+        )
+        if ticker_col is None:
+            continue
 
+        name_col = next(
+            (cols[k] for k in cols if any(h.lower() in k.lower() for h in name_hints)),
+            None
+        )
+        sector_col = next(
+            (cols[k] for k in cols if any(h.lower() in k.lower() for h in sector_hints)),
+            None
+        )
+        industry_col = next(
+            (cols[k] for k in cols if "sub-industry" in k.lower() or
+             ("industry" in k.lower() and "sub" not in k.lower())),
+            None
+        )
 
-def fetch_sp_midsmall() -> list[str]:
-    """
-    Wikipedia S&P400 + S&P600 pentru mid/small cap base.
-    Fara API key. Completeaza ce lipseste din gainers/losers/actives.
-    """
-    sources = [
-        ("S&P400", "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"),
-        ("S&P600", "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"),
-        ("S&P500", "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"),
-    ]
-    tickers = []
-    for name, url in sources:
-        try:
-            html = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15).text
-            tables = pd.read_html(html, flavor="lxml")
-            df     = tables[0]
-            col    = next(
-                (c for c in df.columns
-                 if any(k in str(c) for k in ["Ticker","Symbol","ticker","symbol"])),
-                df.columns[0]
-            )
-            t = (
-                df[col].astype(str).str.strip()
-                .str.replace(".", "-", regex=False).tolist()
-            )
-            t = [x for x in t if x and x != "nan" and len(x) <= 6]
-            tickers.extend(t)
-            print(f"  {name}: {len(t)} tickers")
-        except Exception as e:
-            print(f"  {name} EROARE: {e}")
-    seen, unique = set(), []
-    for t in tickers:
-        if t not in seen:
-            seen.add(t)
-            unique.append(t)
-    return unique
-
-
-def build_universe() -> list[dict]:
-    print("=== Universe Builder ===")
-    if not FMP_KEY:
-        raise ValueError("FMP_KEY nu e setat")
-
-    # Step 1: tickers activi din FMP (3 calls)
-    print("Step 1: FMP gainers + losers + actives...")
-    active = fetch_active_tickers()
-    active_symbols = {t["ticker"] for t in active}
-    print(f"  Total activi: {len(active)}")
-
-    # Step 2: S&P400 + S&P600 de pe Wikipedia
-    print("Step 2: Wikipedia S&P400 + S&P600...")
-    sp_tickers = fetch_sp_midsmall()
-
-    # Step 3: Combina — adauga din S&P ce nu e deja in active
-    universe = list(active)
-    for ticker in sp_tickers:
-        if ticker not in active_symbols:
-            universe.append({
+        results = []
+        for _, row in df.iterrows():
+            raw = str(row[ticker_col]).strip()
+            ticker = raw.replace(".", "-").upper()
+            if not ticker or ticker in ("NAN", "TICKER", "SYMBOL") or len(ticker) > 6:
+                continue
+            results.append({
                 "ticker":       ticker,
-                "company_name": "",
-                "exchange":     "",
-                "sector":       "",
-                "industry":     "",
+                "company_name": str(row[name_col]).strip() if name_col is not None else "",
+                "sector":       str(row[sector_col]).strip() if sector_col is not None else "",
+                "industry":     str(row[industry_col]).strip() if industry_col is not None else "",
+                "index_member": index_name,
                 "market_cap":   0,
                 "avg_volume":   0,
             })
 
-    # Curata "sources" din dict inainte de salvare
-    for u in universe:
-        u.pop("sources", None)
+        if results:
+            print(f"  [{index_name}] {len(results)} tickers")
+            return results
 
-    # Sorteaza: mai intai cei cu market cap cunoscut
-    universe.sort(key=lambda x: x["market_cap"], reverse=True)
+    print(f"  [{index_name}] tabel valid negăsit")
+    return []
+
+
+def get_sp500() -> list[dict]:
+    return _parse_wiki_index(
+        url="https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+        index_name="SP500",
+        ticker_hints=["Symbol", "Ticker"],
+        name_hints=["Security", "Company", "Name"],
+        sector_hints=["GICS Sector", "Sector"],
+    )
+
+
+def get_nasdaq100() -> list[dict]:
+    return _parse_wiki_index(
+        url="https://en.wikipedia.org/wiki/Nasdaq-100",
+        index_name="NDX100",
+        ticker_hints=["Ticker", "Symbol"],
+        name_hints=["Company", "Security", "Name"],
+        sector_hints=["GICS Sector", "Sector"],
+    )
+
+
+def get_sp400() -> list[dict]:
+    return _parse_wiki_index(
+        url="https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
+        index_name="SP400",
+        ticker_hints=["Ticker symbol", "Ticker", "Symbol"],
+        name_hints=["Company", "Security", "Name"],
+        sector_hints=["GICS Sector", "Sector"],
+    )
+
+
+# ── Volume enrichment ─────────────────────────────────────────
+
+def _enrich_with_volume(tickers: list[str], batch_size: int = 100) -> dict[str, int]:
+    """
+    Batch download 30 de zile OHLCV.
+    Returnează {ticker: avg_volume_20d}.
+    """
+    vol_map: dict[str, int] = {}
+    total_batches = (len(tickers) + batch_size - 1) // batch_size
+    print(f"  Volume enrich: {len(tickers)} tickers în {total_batches} batch-uri...")
+
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i: i + batch_size]
+        try:
+            raw = yf.download(
+                batch,
+                period="30d",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                group_by="ticker",
+            )
+            for ticker in batch:
+                try:
+                    if len(batch) == 1:
+                        hist = raw
+                    elif hasattr(raw.columns, "levels"):
+                        if ticker not in raw.columns.get_level_values(0):
+                            continue
+                        hist = raw[ticker]
+                    else:
+                        continue
+
+                    vol = hist["Volume"].dropna()
+                    if len(vol) >= 5:
+                        vol_map[ticker] = int(vol.tail(20).mean())
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"  Batch {i // batch_size + 1}/{total_batches} eroare: {e}")
+
+        if i + batch_size < len(tickers):
+            time.sleep(0.5)
+
+    return vol_map
+
+
+# ── Main ──────────────────────────────────────────────────────
+
+def build_universe() -> list[dict]:
+    print("=== Universe Builder v2 ===")
+
+    print("Step 1: Descarcă indici din Wikipedia...")
+    sp500  = get_sp500()
+    ndx100 = get_nasdaq100()
+    sp400  = get_sp400()
+
+    # Dedup: SP500 > NDX100 > SP400 (prioritate pentru sector/name)
+    seen: dict[str, dict] = {}
+    for batch in [sp500, ndx100, sp400]:
+        for item in batch:
+            t = item["ticker"]
+            if t not in seen:
+                seen[t] = item
+
+    all_items  = list(seen.values())
+    all_tickers = [t["ticker"] for t in all_items]
+    print(f"  Total unic: {len(all_items)} tickers")
+
+    print("Step 2: Enrich cu avg_volume din yfinance...")
+    vol_map = _enrich_with_volume(all_tickers)
+
+    print("Step 3: Filtrare avg_volume > {:,}...".format(MIN_AVG_VOL))
+    universe, filtered = [], 0
+    for item in all_items:
+        avg_vol = vol_map.get(item["ticker"], 0)
+        if avg_vol < MIN_AVG_VOL:
+            filtered += 1
+            continue
+        item["avg_volume"] = avg_vol
+        universe.append(item)
+
+    universe.sort(key=lambda x: x["avg_volume"], reverse=True)
 
     print(f"\nUniverse final: {len(universe)} tickers")
+    print(f"  Filtrate (vol < {MIN_AVG_VOL:,}): {filtered}")
+    print(f"  SP500: {sum(1 for u in universe if u['index_member'] == 'SP500')}")
+    print(f"  NDX100: {sum(1 for u in universe if u['index_member'] == 'NDX100')}")
+    print(f"  SP400: {sum(1 for u in universe if u['index_member'] == 'SP400')}")
     return universe
 
 
@@ -160,7 +220,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     save_universe(universe)
-    print(f"Salvat {len(universe)} tickers in Supabase")
-    for t in universe[:5]:
-        mc = t["market_cap"] / 1e9 if t["market_cap"] else 0
-        print(f"  {t['ticker']:<8} ${mc:.1f}B  vol={t['avg_volume']:,}")
+    print(f"\nSalvat {len(universe)} tickers în Supabase")
+    for u in universe[:5]:
+        print(f"  {u['ticker']:<8}  {u['index_member']:<7}  vol={u['avg_volume']:>12,}  {u['sector']}")
