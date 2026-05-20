@@ -60,33 +60,35 @@ def _parse_wiki_index(url: str, index_name: str,
     all_candidates: list[list[dict]] = []
 
     for t_idx, df in enumerate(tables[:10]):
-        if len(df) < 20:          # un index are cel puțin 20 de companii
+        if len(df) < 20:
             continue
 
-        cols = [str(c) for c in df.columns]
+        # Aplatizează MultiIndex columns (ex: ('Added','Ticker') → 'Added Ticker')
+        if hasattr(df.columns, "levels"):
+            df.columns = [
+                " ".join(str(lvl) for lvl in col if str(lvl) not in ("", "nan")).strip()
+                for col in df.columns
+            ]
+        else:
+            df.columns = [str(c) for c in df.columns]
 
-        # Găsește coloana cu ticker-uri
-        ticker_col = next(
-            (c for c in cols if any(h.lower() in c.lower() for h in ticker_hints)),
-            None
-        )
+        cols = list(df.columns)
+
+        def _find_col(hints):
+            return next(
+                (c for c in cols if any(h.lower() in c.lower() for h in hints)),
+                None
+            )
+
+        ticker_col   = _find_col(ticker_hints)
         if ticker_col is None:
             continue
 
-        # Coloane opționale
-        name_col = next(
-            (c for c in cols if any(h.lower() in c.lower() for h in name_hints)),
-            None
-        )
-        sector_col = next(
-            (c for c in cols if any(h.lower() in c.lower() for h in sector_hints)),
-            None
-        )
-        industry_col = next(
-            (c for c in cols if "sub-industry" in c.lower() or
-             ("industry" in c.lower() and "sub" not in c.lower())),
-            None
-        )
+        name_col     = _find_col(name_hints)
+        sector_col   = _find_col(sector_hints)
+        industry_col = _find_col(["sub-industry", "sub industry"])
+        if industry_col is None:
+            industry_col = _find_col(["industry"])
 
         results = []
         for _, row in df.iterrows():
