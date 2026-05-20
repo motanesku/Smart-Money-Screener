@@ -178,6 +178,59 @@ def _find_col(columns, hints: list[str]) -> str | None:
     return None
 
 
+# ── Sector enrichment din yfinance ───────────────────────────
+
+def _enrich_sector(items: list[dict], batch_size: int = 20) -> list[dict]:
+    """
+    Completează sector + industry + company_name din yfinance.info
+    pentru tickerii cu sector lipsă.
+    Rulează doar la universe build (o dată/săptămână) — ~4 minute pentru 900 tickers.
+    """
+    missing = [x for x in items if not x.get("sector") or x["sector"] in ("", "-", "nan")]
+    if not missing:
+        return items
+
+    print(f"  Sector lipsă: {len(missing)} tickers → enrich din yfinance...")
+    sector_map: dict[str, dict] = {}
+    total = (len(missing) + batch_size - 1) // batch_size
+
+    for i in range(0, len(missing), batch_size):
+        batch = missing[i: i + batch_size]
+        for item in batch:
+            sym = item["ticker"]
+            try:
+                info = yf.Ticker(sym).info
+                sector_map[sym] = {
+                    "sector":       info.get("sector")   or "",
+                    "industry":     info.get("industry") or "",
+                    "company_name": info.get("longName") or item.get("company_name") or "",
+                }
+            except Exception:
+                sector_map[sym] = {"sector": "", "industry": "", "company_name": ""}
+
+        done = min(i + batch_size, len(missing))
+        print(f"  Sector enrich: {done}/{len(missing)}", end="\r", flush=True)
+
+        if i + batch_size < len(missing):
+            time.sleep(0.5)
+
+    print()  # newline după \r
+
+    # Aplică îmbogățirile
+    for item in items:
+        sym = item["ticker"]
+        if sym in sector_map:
+            enr = sector_map[sym]
+            if enr["sector"]:
+                item["sector"] = enr["sector"]
+            if enr["industry"]:
+                item["industry"] = enr["industry"]
+            if enr["company_name"] and not item.get("company_name"):
+                item["company_name"] = enr["company_name"]
+
+    return items
+
+
 # ── Volume enrichment din yfinance ───────────────────────────
 
 def _enrich_with_volume(tickers: list[str], batch_size: int = 100) -> dict[str, int]:
@@ -250,10 +303,13 @@ def build_universe() -> list[dict]:
     all_tickers = [t["ticker"] for t in all_items]
     print(f"  Total unic: {len(all_items)} tickers")
 
-    print("Step 2: Enrich cu avg_volume din yfinance...")
+    print("Step 2: Enrich sector + industry din yfinance...")
+    all_items = _enrich_sector(all_items)
+
+    print("Step 3: Enrich cu avg_volume din yfinance...")
     vol_map = _enrich_with_volume(all_tickers)
 
-    print(f"Step 3: Filtrare avg_volume > {MIN_AVG_VOL:,}...")
+    print(f"Step 4: Filtrare avg_volume > {MIN_AVG_VOL:,}...")
     universe, filtered = [], 0
     for item in all_items:
         avg_vol = vol_map.get(item["ticker"], 0)
